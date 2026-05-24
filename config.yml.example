@@ -1,0 +1,15 @@
+telegram_token: ""
+telegram_chat_id: 0
+frigate_url: "http://localhost:5000"
+poll_interval: 5
+event_limit: 50
+state_file: "/data/state.json"
+include_cameras:
+  - all
+exclude_cameras: []
+include_labels:
+  - person
+exclude_labels: []
+send_snapshot: true
+send_video: false
+debug: false
