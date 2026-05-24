@@ -1,8 +1,9 @@
+import asyncio
 import json
 import logging
-import os
 import threading
 import time
+from collections.abc import Coroutine
 from pathlib import Path
 
 from app.frigate import FrigateClient, FrigateEvent
@@ -21,6 +22,7 @@ class EventMonitor:
         exclude_labels: list[str] | None = None,
         include_cameras: list[str] | None = None,
         exclude_cameras: list[str] | None = None,
+        loop: asyncio.AbstractEventLoop | None = None,
     ):
         self.client = client
         self.state_file = state_file
@@ -30,6 +32,7 @@ class EventMonitor:
         self.exclude_labels = exclude_labels or []
         self.include_cameras = include_cameras or ["all"]
         self.exclude_cameras = exclude_cameras or []
+        self._loop = loop
         self._seen_ids: set[str] = set()
         self._on_event: list[callable] = []
         self._running = False
@@ -84,7 +87,12 @@ class EventMonitor:
                             )
                             for cb in self._on_event:
                                 try:
-                                    cb(event)
+                                    result = cb(event)
+                                    if isinstance(result, Coroutine):
+                                        if self._loop:
+                                            asyncio.run_coroutine_threadsafe(result, self._loop)
+                                        else:
+                                            logger.warning("No event loop for async callback")
                                 except Exception as exc:
                                     logger.error("Callback error: %s", exc)
                 if len(self._seen_ids) > 10000:

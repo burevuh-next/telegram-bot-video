@@ -20,6 +20,8 @@ async def run(config: Config):
         send_snapshot=config.send_snapshot,
         send_video=config.send_video,
     )
+    loop = asyncio.get_event_loop()
+
     monitor = EventMonitor(
         client=frigate,
         state_file=config.state_file,
@@ -29,6 +31,7 @@ async def run(config: Config):
         exclude_labels=config.exclude_labels,
         include_cameras=config.include_cameras,
         exclude_cameras=config.exclude_cameras,
+        loop=loop,
     )
 
     monitor.on_event(notifier.send_event_notification)
@@ -39,7 +42,6 @@ async def run(config: Config):
         logger.info("Received signal %s, shutting down...", sig)
         stop_event.set()
 
-    loop = asyncio.get_event_loop()
     for sig in (signal.SIGINT, signal.SIGTERM):
         try:
             loop.add_signal_handler(sig, lambda s=sig: shutdown(s))
