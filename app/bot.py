@@ -37,10 +37,13 @@ class TelegramNotifier:
         self.application.add_handler(CommandHandler("unmute", self.cmd_unmute))
 
     async def _reply(self, update: Update, text: str):
-        if update.effective_chat and update.effective_chat.id != self.chat_id:
-            return
+        if update.effective_chat:
+            if update.effective_chat.id != self.chat_id:
+                logger.warning("Ignoring message from chat %d (expected %d)", update.effective_chat.id, self.chat_id)
+                return
+        logger.info("Handling command from chat %d", update.effective_chat.id if update.effective_chat else 0)
         if update.message:
-            await update.message.reply_text(text, disable_notification=True)
+            await update.message.reply_text(text)
 
     async def cmd_start(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         await self._reply(
@@ -72,7 +75,7 @@ class TelegramNotifier:
     async def cmd_cameras(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         if update.effective_chat and update.effective_chat.id != self.chat_id:
             return
-        cameras = self.frigate.get_cameras()
+        cameras = await asyncio.to_thread(self.frigate.get_cameras)
         if not cameras:
             await self._reply(update, "Не удалось получить список камер.")
             return
@@ -90,7 +93,7 @@ class TelegramNotifier:
             return
         camera_name = context.args[0]
         msg = await update.message.reply_text("Запрашиваю снимок...")
-        data = self.frigate.get_latest_snapshot(camera_name)
+        data = await asyncio.to_thread(self.frigate.get_latest_snapshot, camera_name)
         if data:
             await msg.delete()
             await update.message.reply_photo(
@@ -110,7 +113,7 @@ class TelegramNotifier:
             score = f"\n📊 Уверенность: {event.top_score:.0%}" if event.top_score else ""
             caption = f"🚨 Обнаружен {event.label}\n📷 Камера: {event.camera}\n⏱ {ts}{score}"
 
-            thumbnail = self.frigate.get_thumbnail(event.id)
+            thumbnail = await asyncio.to_thread(self.frigate.get_thumbnail, event.id)
             if thumbnail:
                 await self.application.bot.send_photo(
                     chat_id=self.chat_id,
@@ -121,7 +124,7 @@ class TelegramNotifier:
                 return
 
             if self.send_video and event.has_clip:
-                clip = self.frigate.get_clip(event.id)
+                clip = await asyncio.to_thread(self.frigate.get_clip, event.id)
                 if clip:
                     await self.application.bot.send_video(
                         chat_id=self.chat_id,
