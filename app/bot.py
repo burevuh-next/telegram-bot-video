@@ -1,3 +1,4 @@
+import asyncio
 import io
 import logging
 from datetime import datetime
@@ -147,10 +148,18 @@ class TelegramNotifier:
         await self.application.bot.set_my_commands(commands)
 
     async def start(self):
-        await self.application.initialize()
-        await self.application.start()
-        await self.set_commands()
-        logger.info("Telegram bot started")
+        for attempt in range(5):
+            try:
+                await self.application.initialize()
+                await self.application.start()
+                await self.set_commands()
+                logger.info("Telegram bot started")
+                return
+            except Exception as exc:
+                logger.warning("Telegram connect attempt %d/5 failed: %s", attempt + 1, exc)
+                if attempt < 4:
+                    await asyncio.sleep(5)
+        logger.warning("Telegram bot started with delayed connection (will retry in background)")
 
     async def stop(self):
         await self.application.stop()
