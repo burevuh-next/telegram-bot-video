@@ -3,6 +3,7 @@ services:
     build: .
     container_name: frigate-telegram-bot
     restart: unless-stopped
+    network_mode: host
     volumes:
       - ./config.yml:/config/config.yml:ro
       - bot-data:/data
