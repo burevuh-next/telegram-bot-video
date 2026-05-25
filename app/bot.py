@@ -44,7 +44,6 @@ class TelegramNotifier:
         self.application.add_handler(CommandHandler("snapall", self.cmd_snapall))
         self.application.add_handler(CommandHandler("event", self.cmd_event))
         self.application.add_handler(CommandHandler("record", self.cmd_record))
-        self.application.add_handler(CommandHandler("ptz", self.cmd_ptz))
         self.application.add_handler(CommandHandler("quiet", self.cmd_quiet))
         self.application.add_handler(CommandHandler("health", self.cmd_health))
         self.application.add_handler(CommandHandler("stats", self.cmd_stats))
@@ -71,7 +70,6 @@ class TelegramNotifier:
             "/snapall — снимки со всех камер",
             "/event <id> — информация о событии",
             "/record <камера> [on|off] — запись",
-            "/ptz <камера> <действие> — управление PTZ",
             "/quiet [время|off] — тихие часы",
             "/health — состояние Frigate",
             "/stats — статистика",
@@ -227,23 +225,6 @@ class TelegramNotifier:
                 await self._reply(update, f"📷 {camera}\nЗапись: {rec}\nДетекция: {det}")
             else:
                 await self._reply(update, f"Не удалось получить статус {camera}")
-
-    async def cmd_ptz(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        if update.effective_chat and update.effective_chat.id != self.chat_id:
-            return
-        if len(context.args) < 2:
-            await self._reply(update, "Использование: /ptz <камера> <действие> [аргумент]\nДействия: left, right, up, down, stop, preset <имя>, zoom_in, zoom_out")
-            return
-        camera = context.args[0]
-        action = context.args[1].lower()
-        params = {}
-        if action == "preset":
-            if len(context.args) < 3:
-                await self._reply(update, "Укажи имя пресета: /ptz <камера> preset <имя>")
-                return
-            params["preset"] = context.args[2]
-        ok = await asyncio.to_thread(self.frigate.ptz, camera, action, **params)
-        await self._reply(update, f"✅ PTZ {camera}: {action}" if ok else f"❌ PTZ {camera}: ошибка")
 
     async def cmd_quiet(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         if update.effective_chat and update.effective_chat.id != self.chat_id:
@@ -449,7 +430,6 @@ class TelegramNotifier:
             BotCommand("snapall", "Снимки со всех камер"),
             BotCommand("event", "Инфо о событии"),
             BotCommand("record", "Управление записью"),
-            BotCommand("ptz", "Управление PTZ"),
             BotCommand("quiet", "Тихие часы"),
             BotCommand("health", "Состояние Frigate"),
             BotCommand("stats", "Статистика"),
