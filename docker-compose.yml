@@ -3,12 +3,17 @@ services:
     build: .
     container_name: frigate-telegram-bot
     restart: unless-stopped
-    network_mode: host
     volumes:
       - ./config.yml:/config/config.yml:ro
       - bot-data:/data
     environment:
       - TZ=Europe/Moscow
+    healthcheck:
+      test: ["CMD", "python", "-c", "import sys; sys.exit(0)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
 
 volumes:
   bot-data:

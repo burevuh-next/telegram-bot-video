@@ -1,14 +1,9 @@
 import asyncio
 import json
 import logging
-import threading
-import time
-from collections.abc import Coroutine
 from pathlib import Path
 
 from app.frigate import FrigateClient, FrigateEvent
-
-_lock = threading.Lock()
 
 logger = logging.getLogger(__name__)
 
@@ -24,7 +19,6 @@ class EventMonitor:
         exclude_labels: list[str] | None = None,
         include_cameras: list[str] | None = None,
         exclude_cameras: list[str] | None = None,
-        loop: asyncio.AbstractEventLoop | None = None,
     ):
         self.client = client
         self.state_file = state_file
@@ -34,11 +28,10 @@ class EventMonitor:
         self.exclude_labels = exclude_labels or []
         self.include_cameras = include_cameras or ["all"]
         self.exclude_cameras = exclude_cameras or []
-        self._loop = loop
         self._seen_ids: set[str] = set()
         self._on_event: list[callable] = []
         self._running = False
-        self._thread: threading.Thread | None = None
+        self._task: asyncio.Task | None = None
         self._load_state()
 
     def on_event(self, callback: callable):
@@ -54,7 +47,7 @@ class EventMonitor:
             except Exception as exc:
                 logger.warning("Failed to load state: %s", exc)
 
-    def _save_state(self):
+    async def _save_state(self):
         try:
             path = Path(self.state_file)
             path.parent.mkdir(parents=True, exist_ok=True)
@@ -63,82 +56,70 @@ class EventMonitor:
             logger.warning("Failed to save state: %s", exc)
 
     def _should_process(self, event: FrigateEvent) -> bool:
-        with _lock:
-            include_cameras = self.include_cameras
-            include_labels = self.include_labels
-            exclude_cameras = self.exclude_cameras
-            exclude_labels = self.exclude_labels
-        if "all" not in include_cameras and event.camera not in include_cameras:
+        if "all" not in self.include_cameras and event.camera not in self.include_cameras:
             return False
-        if event.camera in exclude_cameras:
+        if event.camera in self.exclude_cameras:
             return False
-        if event.label in exclude_labels:
+        if event.label in self.exclude_labels:
             return False
-        if include_labels and event.label not in include_labels:
+        if self.include_labels and event.label not in self.include_labels:
             return False
         return True
 
     def set_include_labels(self, labels: list[str]):
-        with _lock:
-            self.include_labels = labels
+        self.include_labels = labels
 
     def set_include_cameras(self, cameras: list[str]):
-        with _lock:
-            self.include_cameras = cameras
+        self.include_cameras = cameras
 
     def get_filters(self) -> dict:
-        with _lock:
-            return {
-                "include_labels": list(self.include_labels),
-                "exclude_labels": list(self.exclude_labels),
-                "include_cameras": list(self.include_cameras),
-                "exclude_cameras": list(self.exclude_cameras),
-            }
+        return {
+            "include_labels": list(self.include_labels),
+            "exclude_labels": list(self.exclude_labels),
+            "include_cameras": list(self.include_cameras),
+            "exclude_cameras": list(self.exclude_cameras),
+        }
 
     def add_include_label(self, label: str) -> str:
-        with _lock:
-            if label == "all":
-                self.include_labels = []
-                return "все"
-            if label in self.include_labels:
-                return "уже есть"
-            self.include_labels.append(label)
-            return "добавлена"
+        if label == "all":
+            self.include_labels = []
+            return "все"
+        if label in self.include_labels:
+            return "уже есть"
+        self.include_labels.append(label)
+        return "добавлена"
 
     def remove_include_label(self, label: str) -> str:
-        with _lock:
-            if label == "all":
-                self.include_labels = []
-                return "теперь всё"
-            if label not in self.include_labels:
-                return "не найдена"
-            self.include_labels.remove(label)
-            return "удалена"
+        if label == "all":
+            self.include_labels = []
+            return "теперь всё"
+        if label not in self.include_labels:
+            return "не найдена"
+        self.include_labels.remove(label)
+        return "удалена"
 
     def add_include_camera(self, camera: str) -> str:
-        with _lock:
-            if camera == "all":
-                self.include_cameras = []
-                return "все"
-            if camera in self.include_cameras:
-                return "уже есть"
-            self.include_cameras.append(camera)
-            return "добавлена"
+        if camera == "all":
+            self.include_cameras = []
+            return "все"
+        if camera in self.include_cameras:
+            return "уже есть"
+        self.include_cameras.append(camera)
+        return "добавлена"
 
     def remove_include_camera(self, camera: str) -> str:
-        with _lock:
-            if camera == "all":
-                self.include_cameras = []
-                return "теперь всё"
-            if camera not in self.include_cameras:
-                return "не найдена"
-            self.include_cameras.remove(camera)
-            return "удалена"
+        if camera == "all":
+            self.include_cameras = []
+            return "теперь всё"
+        if camera not in self.include_cameras:
+            return "не найдена"
+        self.include_cameras.remove(camera)
+        return "удалена"
 
-    def _poll(self):
+    async def _poll(self):
         while self._running:
             try:
-                events = self.client.get_events(limit=self.event_limit)
+                events = await self.client.get_events(limit=self.event_limit)
                 for event in events:
                     if event.id not in self._seen_ids:
                         self._seen_ids.add(event.id)
@@ -151,30 +132,30 @@ class EventMonitor:
                             )
                             for cb in self._on_event:
                                 try:
-                                    result = cb(event)
-                                    if isinstance(result, Coroutine):
-                                        if self._loop:
-                                            asyncio.run_coroutine_threadsafe(result, self._loop)
-                                        else:
-                                            logger.warning("No event loop for async callback")
+                                    await cb(event)
                                 except Exception as exc:
                                     logger.error("Callback error: %s", exc)
                 if len(self._seen_ids) > 10000:
                     self._seen_ids = set(list(self._seen_ids)[-5000:])
-                self._save_state()
+                await self._save_state()
+            except asyncio.CancelledError:
+                break
             except Exception as exc:
                 logger.error("Poll error: %s", exc)
-            time.sleep(self.poll_interval)
+            await asyncio.sleep(self.poll_interval)
 
     def start(self):
         self._running = True
-        self._thread = threading.Thread(target=self._poll, daemon=True)
-        self._thread.start()
+        self._task = asyncio.create_task(self._poll())
         logger.info("Monitor started (poll every %ds)", self.poll_interval)
 
-    def stop(self):
+    async def stop(self):
         self._running = False
-        if self._thread:
-            self._thread.join(timeout=10)
-        self._save_state()
+        if self._task:
+            self._task.cancel()
+            try:
+                await self._task
+            except asyncio.CancelledError:
+                pass
+        await self._save_state()
         logger.info("Monitor stopped")

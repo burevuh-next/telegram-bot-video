@@ -8,7 +8,7 @@ import yaml
 @dataclass
 class Config:
     telegram_token: str = ""
-    telegram_chat_id: int = 0
+    telegram_chat_id: int | str = 0
     frigate_url: str = "http://localhost:5000"
     poll_interval: int = 5
     event_limit: int = 50
@@ -49,5 +49,18 @@ class Config:
                     setattr(cfg, attr, int(val))
                 else:
                     setattr(cfg, attr, val)
+
+        if not cfg.telegram_token:
+            raise ValueError("telegram_token is required (set in config.yml or TELEGRAM_TOKEN env)")
+
+        chat_id = cfg.telegram_chat_id
+        if isinstance(chat_id, str):
+            if chat_id.startswith("-") and chat_id[1:].isdigit():
+                cfg.telegram_chat_id = int(chat_id)
+            elif chat_id.isdigit():
+                cfg.telegram_chat_id = int(chat_id)
+
+        if not cfg.telegram_chat_id:
+            raise ValueError("telegram_chat_id is required (set in config.yml or TELEGRAM_CHAT_ID env)")
 
         return cfg

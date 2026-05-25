@@ -1,4 +1,5 @@
 import asyncio
+import functools
 import io
 import logging
 from datetime import date, datetime, time as dt_time
@@ -9,6 +10,15 @@ from telegram.ext import Application, CommandHandler, ContextTypes
 from app.frigate import FrigateClient, FrigateEvent
 
 logger = logging.getLogger(__name__)
+
+
+def authorized_only(func):
+    @functools.wraps(func)
+    async def wrapper(self, update: Update, context: ContextTypes.DEFAULT_TYPE, *args, **kwargs):
+        if not self._authorized(update):
+            return
+        return await func(self, update, context, *args, **kwargs)
+    return wrapper
 
 
 class TelegramNotifier:
@@ -33,6 +43,12 @@ class TelegramNotifier:
         self._quiet_start: dt_time | None = None
         self._quiet_end: dt_time | None = None
 
+    def _authorized(self, update: Update) -> bool:
+        if update.effective_chat and update.effective_chat.id != self.chat_id:
+            logger.warning("Ignoring message from chat %d (expected %d)", update.effective_chat.id, self.chat_id)
+            return False
+        return True
+
     def _register_handlers(self):
         self.application.add_handler(CommandHandler("start", self.cmd_start))
         self.application.add_handler(CommandHandler("help", self.cmd_help))
@@ -52,16 +68,12 @@ class TelegramNotifier:
         self.application.add_handler(CommandHandler("unmute", self.cmd_unmute))
 
     async def _reply(self, update: Update, text: str):
-        if update.effective_chat:
-            if update.effective_chat.id != self.chat_id:
-                logger.warning("Ignoring message from chat %d (expected %d)", update.effective_chat.id, self.chat_id)
-                return
-        logger.info("Handling command from chat %d", update.effective_chat.id if update.effective_chat else 0)
         if update.message:
             await update.message.reply_text(text)
 
+    @authorized_only
     async def cmd_start(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        cameras = await asyncio.to_thread(self.frigate.get_cameras)
+        cameras = await self.frigate.get_cameras()
         lines = [
             "Привет! Я бот уведомлений Frigate.\n",
             "Команды:",
@@ -83,25 +95,23 @@ class TelegramNotifier:
             lines.append(f"/{cam['name']} — снимок с камеры")
         await self._reply(update, "\n".join(lines))
 
+    @authorized_only
     async def cmd_help(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         await self.cmd_start(update, context)
 
+    @authorized_only
     async def cmd_mute(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        if update.effective_chat and update.effective_chat.id != self.chat_id:
-            return
         self._muted = True
         await self._reply(update, "Уведомления отключены.")
 
+    @authorized_only
     async def cmd_unmute(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        if update.effective_chat and update.effective_chat.id != self.chat_id:
-            return
         self._muted = False
         await self._reply(update, "Уведомления включены.")
 
+    @authorized_only
     async def cmd_cameras(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        if update.effective_chat and update.effective_chat.id != self.chat_id:
-            return
-        cameras = await asyncio.to_thread(self.frigate.get_cameras)
+        cameras = await self.frigate.get_cameras()
         if not cameras:
             await self._reply(update, "Не удалось получить список камер.")
             return
@@ -111,9 +121,8 @@ class TelegramNotifier:
             lines.append(f"{status} {cam['name']}")
         await self._reply(update, "\n".join(lines))
 
+    @authorized_only
     async def cmd_subscriptions(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        if update.effective_chat and update.effective_chat.id != self.chat_id:
-            return
         if not self.monitor:
             await self._reply(update, "Монитор не подключён.")
             return
@@ -125,9 +134,8 @@ class TelegramNotifier:
         lines.append(f"📷 Камеры: {'все' if not ic else ', '.join(ic)}")
         await self._reply(update, "\n".join(lines))
 
+    @authorized_only
     async def cmd_subscribe(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        if update.effective_chat and update.effective_chat.id != self.chat_id:
-            return
         if not self.monitor:
             await self._reply(update, "Монитор не подключён.")
             return
@@ -141,9 +149,8 @@ class TelegramNotifier:
             result = self.monitor.add_include_label(context.args[0])
             await self._reply(update, f"🏷 Метка {context.args[0]}: {result}")
 
+    @authorized_only
     async def cmd_unsubscribe(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        if update.effective_chat and update.effective_chat.id != self.chat_id:
-            return
         if not self.monitor:
             await self._reply(update, "Монитор не подключён.")
             return
@@ -157,9 +164,8 @@ class TelegramNotifier:
             result = self.monitor.remove_include_label(context.args[0])
             await self._reply(update, f"🏷 Метка {context.args[0]}: {result}")
 
+    @authorized_only
     async def cmd_event(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        if update.effective_chat and update.effective_chat.id != self.chat_id:
-            return
         if not update.message:
             return
         if not context.args:
@@ -167,7 +173,7 @@ class TelegramNotifier:
             return
         event_id = context.args[0]
         msg = await update.message.reply_text("Запрашиваю событие...")
-        event = await asyncio.to_thread(self.frigate.get_event, event_id)
+        event = await self.frigate.get_event(event_id)
         if not event:
             await msg.edit_text(f"Событие {event_id} не найдено.")
             return
@@ -179,7 +185,7 @@ class TelegramNotifier:
             f"📷 {event.camera}\n"
             f"⏱ {ts}"
         )
-        thumbnail = await asyncio.to_thread(self.frigate.get_thumbnail, event.id)
+        thumbnail = await self.frigate.get_thumbnail(event.id)
         if thumbnail:
             await msg.delete()
             await update.message.reply_photo(
@@ -188,7 +194,7 @@ class TelegramNotifier:
                 caption=caption,
             )
             if event.has_clip:
-                clip = await asyncio.to_thread(self.frigate.get_clip, event.id)
+                clip = await self.frigate.get_clip(event.id)
                 if clip:
                     await update.message.reply_video(
                         io.BytesIO(clip),
@@ -197,9 +203,8 @@ class TelegramNotifier:
         else:
             await msg.edit_text(caption)
 
+    @authorized_only
     async def cmd_record(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        if update.effective_chat and update.effective_chat.id != self.chat_id:
-            return
         if not update.message:
             return
         if not context.args:
@@ -209,15 +214,15 @@ class TelegramNotifier:
         if len(context.args) > 1:
             action = context.args[1].lower()
             if action in ("on", "start", "вкл"):
-                ok = await asyncio.to_thread(self.frigate.recording_start, camera)
+                ok = await self.frigate.recording_start(camera)
                 await self._reply(update, f"✅ Запись на {camera} включена" if ok else f"❌ Ошибка включения записи на {camera}")
             elif action in ("off", "stop", "выкл"):
-                ok = await asyncio.to_thread(self.frigate.recording_stop, camera)
+                ok = await self.frigate.recording_stop(camera)
                 await self._reply(update, f"✅ Запись на {camera} выключена" if ok else f"❌ Ошибка выключения записи на {camera}")
             else:
                 await self._reply(update, "Используй: on/off")
         else:
-            stats = await asyncio.to_thread(self.frigate.get_stats)
+            stats = await self.frigate.get_stats()
             if stats and "cameras" in stats:
                 c = stats["cameras"].get(camera, {})
                 rec = "🔴 вкл" if c.get("recording_enabled") else "⚫ выкл"
@@ -226,9 +231,8 @@ class TelegramNotifier:
             else:
                 await self._reply(update, f"Не удалось получить статус {camera}")
 
+    @authorized_only
     async def cmd_quiet(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        if update.effective_chat and update.effective_chat.id != self.chat_id:
-            return
         if not context.args:
             if self._quiet_start and self._quiet_end:
                 await self._reply(update, f"🔇 Тихие часы: {self._quiet_start.strftime('%H:%M')} — {self._quiet_end.strftime('%H:%M')}")
@@ -251,15 +255,14 @@ class TelegramNotifier:
         except (ValueError, IndexError):
             await self._reply(update, "Неверный формат. Используй: /quiet 23:00-07:00")
 
+    @authorized_only
     async def cmd_health(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        if update.effective_chat and update.effective_chat.id != self.chat_id:
-            return
         if not update.message:
             return
         msg = await update.message.reply_text("Проверяю состояние Frigate...")
-        version = await asyncio.to_thread(self.frigate.get_version)
-        stats = await asyncio.to_thread(self.frigate.get_stats)
-        cameras = await asyncio.to_thread(self.frigate.get_cameras)
+        version = await self.frigate.get_version()
+        stats = await self.frigate.get_stats()
+        cameras = await self.frigate.get_cameras()
         lines = ["🖥 Frigate Health"]
         lines.append(f"Версия: {version or '❌ недоступна'}")
         if cameras:
@@ -272,14 +275,13 @@ class TelegramNotifier:
             lines.append(f"⏱ Frigate работает: {d}д {h}ч {m}м")
         await msg.edit_text("\n".join(lines))
 
+    @authorized_only
     async def cmd_stats(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        if update.effective_chat and update.effective_chat.id != self.chat_id:
-            return
         if not update.message:
             return
         msg = await update.message.reply_text("Собираю статистику...")
         today_start = datetime.combine(date.today(), dt_time.min).timestamp()
-        events = await asyncio.to_thread(self.frigate.get_events, limit=500, after=today_start)
+        events = await self.frigate.get_events(limit=500, after=today_start)
         if not events:
             await msg.edit_text("📊 За сегодня событий нет.")
             return
@@ -299,9 +301,8 @@ class TelegramNotifier:
             lines.append(f"  {cam}: {count}")
         await msg.edit_text("\n".join(lines))
 
+    @authorized_only
     async def cmd_uptime(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        if update.effective_chat and update.effective_chat.id != self.chat_id:
-            return
         if not update.message:
             return
         delta = datetime.now() - self._start_time
@@ -311,7 +312,7 @@ class TelegramNotifier:
             f"🤖 Бот запущен: {self._start_time.strftime('%d.%m.%Y %H:%M:%S')}",
             f"⏳ Работает: {d}д {h}ч {m}м",
         ]
-        stats = await asyncio.to_thread(self.frigate.get_stats)
+        stats = await self.frigate.get_stats()
         if stats and "service_uptime" in stats:
             s = stats["service_uptime"]
             fd, fh, fm = int(s // 86400), int((s % 86400) // 3600), int((s % 3600) // 60)
@@ -333,23 +334,25 @@ class TelegramNotifier:
                 if now >= self._quiet_start or now <= self._quiet_end:
                     logger.info("Quiet hours, skipping notification for %s", event.id)
                     return
+
         try:
             ts = event.start_time_dt.strftime('%d.%m.%Y %H:%M:%S')
             score = f"\n📊 Уверенность: {event.top_score:.0%}" if event.top_score else ""
             caption = f"🚨 Обнаружен {event.label}\n📷 Камера: {event.camera}\n⏱ {ts}{score}"
 
-            thumbnail = await asyncio.to_thread(self.frigate.get_thumbnail, event.id)
-            if thumbnail:
-                await self.application.bot.send_photo(
-                    chat_id=self.chat_id,
-                    photo=io.BytesIO(thumbnail),
-                    filename=f"{event.camera}_{event.id[:8]}.jpg",
-                    caption=caption,
-                )
-                return
+            if self.send_snapshot:
+                thumbnail = await self.frigate.get_thumbnail(event.id)
+                if thumbnail:
+                    await self.application.bot.send_photo(
+                        chat_id=self.chat_id,
+                        photo=io.BytesIO(thumbnail),
+                        filename=f"{event.camera}_{event.id[:8]}.jpg",
+                        caption=caption,
+                    )
+                    return
 
             if self.send_video and event.has_clip:
-                clip = await asyncio.to_thread(self.frigate.get_clip, event.id)
+                clip = await self.frigate.get_clip(event.id)
                 if clip:
                     await self.application.bot.send_video(
                         chat_id=self.chat_id,
@@ -367,12 +370,12 @@ class TelegramNotifier:
 
     def _make_cam_handler(self, camera_name: str):
         async def handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-            if update.effective_chat and update.effective_chat.id != self.chat_id:
+            if not self._authorized(update):
                 return
             if not update.message:
                 return
             msg = await update.message.reply_text("Запрашиваю снимок...")
-            data = await asyncio.to_thread(self.frigate.get_latest_snapshot, camera_name)
+            data = await self.frigate.get_latest_snapshot(camera_name)
             if data:
                 await msg.delete()
                 await update.message.reply_photo(
@@ -385,23 +388,22 @@ class TelegramNotifier:
         return handler
 
     async def _register_camera_commands(self):
-        cameras = await asyncio.to_thread(self.frigate.get_cameras)
+        cameras = await self.frigate.get_cameras()
         for cam in cameras:
             name = cam["name"]
             self.application.add_handler(CommandHandler(name, self._make_cam_handler(name)))
 
+    @authorized_only
     async def cmd_snapall(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        if update.effective_chat and update.effective_chat.id != self.chat_id:
-            return
         if not update.message:
             return
-        cameras = await asyncio.to_thread(self.frigate.get_cameras)
+        cameras = await self.frigate.get_cameras()
         if not cameras:
             await self._reply(update, "Не удалось получить список камер.")
             return
 
         msg = await update.message.reply_text("Запрашиваю снимки со всех камер...")
-        tasks = [asyncio.to_thread(self.frigate.get_latest_snapshot, cam["name"]) for cam in cameras]
+        tasks = [self.frigate.get_latest_snapshot(cam["name"]) for cam in cameras]
         results = await asyncio.gather(*tasks)
         snapshots = dict(zip([cam["name"] for cam in cameras], results))
         await msg.delete()
@@ -422,7 +424,7 @@ class TelegramNotifier:
             await update.message.reply_text(f"Получено {sent} из {len(cameras)} снимков.")
 
     async def set_commands(self):
-        cameras = await asyncio.to_thread(self.frigate.get_cameras)
+        cameras = await self.frigate.get_cameras()
         commands = [
             BotCommand("start", "Показать справку"),
             BotCommand("sub", "Управление подписками"),
