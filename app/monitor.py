@@ -10,55 +10,55 @@ logger = logging.getLogger(__name__)
 
 
 class EventMonitor:
-     def __init__(
-         self,
-         client: FrigateClient,
-         state_file: str,
-         poll_interval: int = 5,
-         event_limit: int = 50,
-         include_labels: list[str] | None = None,
-         exclude_labels: list[str] | None = None,
-         include_cameras: list[str] | None = None,
-         exclude_cameras: list[str] | None = None,
-     ):
-         self.client: FrigateClient = client
-         self.state_file: str = state_file
-         self.poll_interval: int = poll_interval
-         self.event_limit: int = event_limit
-         self.include_labels: list[str] = include_labels or ["person"]
-         self.exclude_labels: list[str] = exclude_labels or []
-         self.include_cameras: list[str] = include_cameras or ["all"]
-         self.exclude_cameras: list[str] = exclude_cameras or []
-         self._seen_ids: set[str] = set()
-         self._on_event: list[Callable[[FrigateEvent], Any]] = []
-         self._running: bool = False
-         self._task: asyncio.Task | None = None
-         self._lock: asyncio.Lock = asyncio.Lock()  # Синхронизация доступа к фильтрам
-         self._load_state()
+    def __init__(
+        self,
+        client: FrigateClient,
+        state_file: str,
+        poll_interval: int = 5,
+        event_limit: int = 50,
+        include_labels: list[str] | None = None,
+        exclude_labels: list[str] | None = None,
+        include_cameras: list[str] | None = None,
+        exclude_cameras: list[str] | None = None,
+    ):
+        self.client: FrigateClient = client
+        self.state_file: str = state_file
+        self.poll_interval: int = poll_interval
+        self.event_limit: int = event_limit
+        self.include_labels: list[str] = include_labels or ["person"]
+        self.exclude_labels: list[str] = exclude_labels or []
+        self.include_cameras: list[str] = include_cameras or ["all"]
+        self.exclude_cameras: list[str] = exclude_cameras or []
+        self._seen_ids: set[str] = set()
+        self._on_event: list[Callable[[FrigateEvent], Any]] = []
+        self._running: bool = False
+        self._task: asyncio.Task | None = None
+        self._lock: asyncio.Lock = asyncio.Lock()  # Синхронизация доступа к фильтрам
+        self._load_state()
 
     def on_event(self, callback: Callable[[FrigateEvent], Any]) -> None:
-         """Зарегистрировать callback для новых событий."""
-         self._on_event.append(callback)
+        """Зарегистрировать callback для новых событий."""
+        self._on_event.append(callback)
 
     def _load_state(self) -> None:
-         """Загрузить состояние (список просмотренных ID) из файла."""
-         path = Path(self.state_file)
-         if path.exists():
-             try:
-                 data = json.loads(path.read_text())
-                 self._seen_ids = set(data.get("seen_ids", []))
-                 logger.info("Loaded %d seen event IDs", len(self._seen_ids))
-             except Exception as exc:
-                 logger.warning("Failed to load state: %s", exc)
+        """Загрузить состояние (список просмотренных ID) из файла."""
+        path = Path(self.state_file)
+        if path.exists():
+            try:
+                data = json.loads(path.read_text())
+                self._seen_ids = set(data.get("seen_ids", []))
+                logger.info("Loaded %d seen event IDs", len(self._seen_ids))
+            except Exception as exc:
+                logger.warning("Failed to load state: %s", exc)
 
     async def _save_state(self) -> None:
-         """Сохранить состояние (список просмотренных ID) в файл."""
-         try:
-             path = Path(self.state_file)
-             path.parent.mkdir(parents=True, exist_ok=True)
-             path.write_text(json.dumps({"seen_ids": list(self._seen_ids)[-5000:]}))
-         except Exception as exc:
-             logger.warning("Failed to save state: %s", exc)
+        """Сохранить состояние (список просмотренных ID) в файл."""
+        try:
+            path = Path(self.state_file)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(json.dumps({"seen_ids": list(self._seen_ids)[-5000:]}))
+        except Exception as exc:
+            logger.warning("Failed to save state: %s", exc)
 
     def _should_process(self, event: FrigateEvent) -> bool:
         """Проверить, нужно ли обработать событие по фильтрам."""
@@ -73,31 +73,31 @@ class EventMonitor:
         return True
 
     def set_include_labels(self, labels: list[str]) -> None:
-         """Обновить список включаемых меток."""
-         asyncio.create_task(self._async_set_include_labels(labels))
+        """Обновить список включаемых меток."""
+        asyncio.create_task(self._async_set_include_labels(labels))
 
     async def _async_set_include_labels(self, labels: list[str]) -> None:
-         """Асинхронно обновить список включаемых меток с блокировкой."""
-         async with self._lock:
-             self.include_labels = labels
+        """Асинхронно обновить список включаемых меток с блокировкой."""
+        async with self._lock:
+            self.include_labels = labels
 
     def set_include_cameras(self, cameras: list[str]) -> None:
-         """Обновить список включаемых камер."""
-         asyncio.create_task(self._async_set_include_cameras(cameras))
+        """Обновить список включаемых камер."""
+        asyncio.create_task(self._async_set_include_cameras(cameras))
 
     async def _async_set_include_cameras(self, cameras: list[str]) -> None:
-         """Асинхронно обновить список включаемых камер с блокировкой."""
-         async with self._lock:
-             self.include_cameras = cameras
+        """Асинхронно обновить список включаемых камер с блокировкой."""
+        async with self._lock:
+            self.include_cameras = cameras
 
     def get_filters(self) -> dict[str, list[str]]:
-         """Получить текущие фильтры событий."""
-         return {
-             "include_labels": list(self.include_labels),
-             "exclude_labels": list(self.exclude_labels),
-             "include_cameras": list(self.include_cameras),
-             "exclude_cameras": list(self.exclude_cameras),
-         }
+        """Получить текущие фильтры событий."""
+        return {
+            "include_labels": list(self.include_labels),
+            "exclude_labels": list(self.exclude_labels),
+            "include_cameras": list(self.include_cameras),
+            "exclude_cameras": list(self.exclude_cameras),
+        }
 
     def add_include_label(self, label: str) -> str:
         """Добавить метку в список включаемых."""
@@ -202,19 +202,19 @@ class EventMonitor:
             await asyncio.sleep(self.poll_interval)
 
     def start(self) -> None:
-         """Запустить мониторинг событий."""
-         self._running = True
-         self._task = asyncio.create_task(self._poll())
-         logger.info("Monitor started (poll every %ds)", self.poll_interval)
+        """Запустить мониторинг событий."""
+        self._running = True
+        self._task = asyncio.create_task(self._poll())
+        logger.info("Monitor started (poll every %ds)", self.poll_interval)
 
     async def stop(self) -> None:
-         """Остановить мониторинг событий."""
-         self._running = False
-         if self._task:
-             self._task.cancel()
-             try:
-                 await self._task
-             except asyncio.CancelledError:
-                 pass
-         await self._save_state()
-         logger.info("Monitor stopped")
+        """Остановить мониторинг событий."""
+        self._running = False
+        if self._task:
+            self._task.cancel()
+            try:
+                await self._task
+            except asyncio.CancelledError:
+                pass
+        await self._save_state()
+        logger.info("Monitor stopped")
