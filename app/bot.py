@@ -151,19 +151,17 @@ class TelegramNotifier:
         await self.application.bot.set_my_commands(commands)
 
     async def start(self):
-        for attempt in range(5):
-            try:
-                await self.application.initialize()
-                await self.application.updater.start_polling()
-                await self.application.start()
-                await self.set_commands()
-                logger.info("Telegram bot started")
-                return
-            except Exception as exc:
-                logger.warning("Telegram connect attempt %d/5 failed: %s", attempt + 1, exc)
-                if attempt < 4:
-                    await asyncio.sleep(5)
-        logger.warning("Telegram bot started with delayed connection (will retry in background)")
+        await self.application.initialize()
+        logger.info("Application initialized")
+        if self.application.updater:
+            logger.info("Starting updater polling...")
+            await self.application.updater.start_polling()
+            logger.info("Updater polling started")
+        else:
+            logger.error("No updater available!")
+        await self.application.start()
+        await self.set_commands()
+        logger.info("Telegram bot started")
 
     async def stop(self):
         await self.application.stop()
