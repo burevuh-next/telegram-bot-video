@@ -135,125 +135,178 @@ class TelegramNotifier:
         await self._reply(update, "\n".join(lines))
 
     @authorized_only
-    async def cmd_subscribe(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        if not self.monitor:
-            await self._reply(update, "Монитор не подключён.")
-            return
-        if not context.args:
-            await self._reply(update, "Укажи: /subscribe <метка> или /subscribe camera <камера>")
-            return
-        if context.args[0] == "camera" and len(context.args) > 1:
-            result = self.monitor.add_include_camera(context.args[1])
-            await self._reply(update, f"📷 Камера {context.args[1]}: {result}")
-        else:
-            result = self.monitor.add_include_label(context.args[0])
-            await self._reply(update, f"🏷 Метка {context.args[0]}: {result}")
+     async def cmd_subscribe(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+         if not self.monitor:
+             await self._reply(update, "Монитор не подключён.")
+             return
+         if not context.args:
+             await self._reply(update, "Укажи: /subscribe <метка> или /subscribe camera <камера>")
+             return
+         
+         if context.args[0] == "camera":
+             if len(context.args) < 2:
+                 await self._reply(update, "Укажи название камеры: /subscribe camera <имя>")
+                 return
+             camera_name = context.args[1]
+             if not camera_name or not isinstance(camera_name, str):
+                 await self._reply(update, "❌ Неверное имя камеры")
+                 return
+             result = self.monitor.add_include_camera(camera_name)
+             await self._reply(update, f"📷 Камера {camera_name}: {result}")
+         else:
+             label = context.args[0]
+             if not label or not isinstance(label, str):
+                 await self._reply(update, "❌ Неверная метка")
+                 return
+             result = self.monitor.add_include_label(label)
+             await self._reply(update, f"🏷 Метка {label}: {result}")
 
     @authorized_only
-    async def cmd_unsubscribe(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        if not self.monitor:
-            await self._reply(update, "Монитор не подключён.")
-            return
-        if not context.args:
-            await self._reply(update, "Укажи: /unsubscribe <метка> или /unsubscribe camera <камера>")
-            return
-        if context.args[0] == "camera" and len(context.args) > 1:
-            result = self.monitor.remove_include_camera(context.args[1])
-            await self._reply(update, f"📷 Камера {context.args[1]}: {result}")
-        else:
-            result = self.monitor.remove_include_label(context.args[0])
-            await self._reply(update, f"🏷 Метка {context.args[0]}: {result}")
+     async def cmd_unsubscribe(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+         if not self.monitor:
+             await self._reply(update, "Монитор не подключён.")
+             return
+         if not context.args:
+             await self._reply(update, "Укажи: /unsubscribe <метка> или /unsubscribe camera <камера>")
+             return
+         
+         if context.args[0] == "camera":
+             if len(context.args) < 2:
+                 await self._reply(update, "Укажи название камеры: /unsubscribe camera <имя>")
+                 return
+             camera_name = context.args[1]
+             if not camera_name or not isinstance(camera_name, str):
+                 await self._reply(update, "❌ Неверное имя камеры")
+                 return
+             result = self.monitor.remove_include_camera(camera_name)
+             await self._reply(update, f"📷 Камера {camera_name}: {result}")
+         else:
+             label = context.args[0]
+             if not label or not isinstance(label, str):
+                 await self._reply(update, "❌ Неверная метка")
+                 return
+             result = self.monitor.remove_include_label(label)
+             await self._reply(update, f"🏷 Метка {label}: {result}")
 
     @authorized_only
-    async def cmd_event(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        if not update.message:
-            return
-        if not context.args:
-            await self._reply(update, "Укажи ID события: /event <id>")
-            return
-        event_id = context.args[0]
-        msg = await update.message.reply_text("Запрашиваю событие...")
-        event = await self.frigate.get_event(event_id)
-        if not event:
-            await msg.edit_text(f"Событие {event_id} не найдено.")
-            return
-        ts = event.start_time_dt.strftime('%d.%m.%Y %H:%M:%S')
-        score = f" (уверенность {event.top_score:.0%})" if event.top_score else ""
-        caption = (
-            f"🚨 Событие {event.id[:12]}…\n"
-            f"🏷 {event.label}{score}\n"
-            f"📷 {event.camera}\n"
-            f"⏱ {ts}"
-        )
-        thumbnail = await self.frigate.get_thumbnail(event.id)
-        if thumbnail:
-            await msg.delete()
-            await update.message.reply_photo(
-                io.BytesIO(thumbnail),
-                filename=f"{event.id[:8]}.jpg",
-                caption=caption,
-            )
-            if event.has_clip:
-                clip = await self.frigate.get_clip(event.id)
-                if clip:
-                    await update.message.reply_video(
-                        io.BytesIO(clip),
-                        filename=f"{event.id[:8]}.mp4",
-                    )
-        else:
-            await msg.edit_text(caption)
+     async def cmd_event(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+         if not update.message:
+             return
+         if not context.args:
+             await self._reply(update, "Укажи ID события: /event <id>")
+             return
+         
+         event_id = context.args[0]
+         # Валидация event_id (должен быть непустой строкой)
+         if not event_id or not isinstance(event_id, str) or len(event_id) == 0:
+             await self._reply(update, "❌ Неверный ID события")
+             return
+         
+         msg = await update.message.reply_text("Запрашиваю событие...")
+         event = await self.frigate.get_event(event_id)
+         if not event:
+             await msg.edit_text(f"Событие {event_id} не найдено.")
+             return
+         ts = event.start_time_dt.strftime('%d.%m.%Y %H:%M:%S')
+         score = f" (уверенность {event.top_score:.0%})" if event.top_score else ""
+         caption = (
+             f"🚨 Событие {event.id[:12]}…\n"
+             f"🏷 {event.label}{score}\n"
+             f"📷 {event.camera}\n"
+             f"⏱ {ts}"
+         )
+         thumbnail = await self.frigate.get_thumbnail(event.id)
+         if thumbnail:
+             await msg.delete()
+             await update.message.reply_photo(
+                 io.BytesIO(thumbnail),
+                 filename=f"{event.id[:8]}.jpg",
+                 caption=caption,
+             )
+             if event.has_clip:
+                 clip = await self.frigate.get_clip(event.id)
+                 if clip:
+                     await update.message.reply_video(
+                         io.BytesIO(clip),
+                         filename=f"{event.id[:8]}.mp4",
+                     )
+         else:
+             await msg.edit_text(caption)
 
     @authorized_only
-    async def cmd_record(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        if not update.message:
-            return
-        if not context.args:
-            await self._reply(update, "Укажи камеру: /record <камера> [on|off]")
-            return
-        camera = context.args[0]
-        if len(context.args) > 1:
-            action = context.args[1].lower()
-            if action in ("on", "start", "вкл"):
-                ok = await self.frigate.recording_start(camera)
-                await self._reply(update, f"✅ Запись на {camera} включена" if ok else f"❌ Ошибка включения записи на {camera}")
-            elif action in ("off", "stop", "выкл"):
-                ok = await self.frigate.recording_stop(camera)
-                await self._reply(update, f"✅ Запись на {camera} выключена" if ok else f"❌ Ошибка выключения записи на {camera}")
-            else:
-                await self._reply(update, "Используй: on/off")
-        else:
-            stats = await self.frigate.get_stats()
-            if stats and "cameras" in stats:
-                c = stats["cameras"].get(camera, {})
-                rec = "🔴 вкл" if c.get("recording_enabled") else "⚫ выкл"
-                det = "🎯 вкл" if c.get("detection_enabled") else "🎯 выкл"
-                await self._reply(update, f"📷 {camera}\nЗапись: {rec}\nДетекция: {det}")
-            else:
-                await self._reply(update, f"Не удалось получить статус {camera}")
+     async def cmd_record(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+         if not update.message:
+             return
+         if not context.args:
+             await self._reply(update, "Укажи камеру: /record <камера> [on|off]")
+             return
+         
+         camera = context.args[0]
+         # Валидация названия камеры
+         if not camera or not isinstance(camera, str) or len(camera) == 0:
+             await self._reply(update, "❌ Неверное имя камеры")
+             return
+         
+         if len(context.args) > 1:
+             action = context.args[1].lower()
+             if action in ("on", "start", "вкл"):
+                 ok = await self.frigate.recording_start(camera)
+                 await self._reply(update, f"✅ Запись на {camera} включена" if ok else f"❌ Ошибка включения записи на {camera}")
+             elif action in ("off", "stop", "выкл"):
+                 ok = await self.frigate.recording_stop(camera)
+                 await self._reply(update, f"✅ Запись на {camera} выключена" if ok else f"❌ Ошибка выключения записи на {camera}")
+             else:
+                 await self._reply(update, "Используй: on/off")
+         else:
+             stats = await self.frigate.get_stats()
+             if stats and "cameras" in stats:
+                 c = stats["cameras"].get(camera, {})
+                 rec = "🔴 вкл" if c.get("recording_enabled") else "⚫ выкл"
+                 det = "🎯 вкл" if c.get("detection_enabled") else "🎯 выкл"
+                 await self._reply(update, f"📷 {camera}\nЗапись: {rec}\nДетекция: {det}")
+             else:
+                 await self._reply(update, f"Не удалось получить статус {camera}")
 
     @authorized_only
-    async def cmd_quiet(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        if not context.args:
-            if self._quiet_start and self._quiet_end:
-                await self._reply(update, f"🔇 Тихие часы: {self._quiet_start.strftime('%H:%M')} — {self._quiet_end.strftime('%H:%M')}")
-            else:
-                await self._reply(update, "🔇 Тихие часы не установлены. Используй: /quiet 23:00-07:00")
-            return
-        if context.args[0].lower() in ("off", "выкл", "disable"):
-            self._quiet_start = self._quiet_end = None
-            await self._reply(update, "🔇 Тихие часы отключены.")
-            return
-        try:
-            times = context.args[0].split("-")
-            if len(times) != 2:
-                raise ValueError
-            sh, sm = times[0].strip().split(":")
-            eh, em = times[1].strip().split(":")
-            self._quiet_start = dt_time(int(sh), int(sm))
-            self._quiet_end = dt_time(int(eh), int(em))
-            await self._reply(update, f"🔇 Тихие часы: {self._quiet_start.strftime('%H:%M')} — {self._quiet_end.strftime('%H:%M')}")
-        except (ValueError, IndexError):
-            await self._reply(update, "Неверный формат. Используй: /quiet 23:00-07:00")
+     async def cmd_quiet(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+         if not context.args:
+             if self._quiet_start and self._quiet_end:
+                 await self._reply(update, f"🔇 Тихие часы: {self._quiet_start.strftime('%H:%M')} — {self._quiet_end.strftime('%H:%M')}")
+             else:
+                 await self._reply(update, "🔇 Тихие часы не установлены. Используй: /quiet 23:00-07:00")
+             return
+         if context.args[0].lower() in ("off", "выкл", "disable"):
+             self._quiet_start = self._quiet_end = None
+             await self._reply(update, "🔇 Тихие часы отключены.")
+             return
+         try:
+             time_arg = context.args[0].strip()
+             # Валидация формата времени
+             if "-" not in time_arg:
+                 raise ValueError("Format must be HH:MM-HH:MM")
+             
+             times = time_arg.split("-")
+             if len(times) != 2:
+                 raise ValueError("Expected exactly 2 times")
+             
+             sh, sm = times[0].strip().split(":")
+             eh, em = times[1].strip().split(":")
+             
+             # Валидация часов и минут
+             start_h, start_m = int(sh), int(sm)
+             end_h, end_m = int(eh), int(em)
+             
+             if not (0 <= start_h <= 23 and 0 <= start_m <= 59):
+                 raise ValueError("Invalid start time")
+             if not (0 <= end_h <= 23 and 0 <= end_m <= 59):
+                 raise ValueError("Invalid end time")
+             
+             self._quiet_start = dt_time(start_h, start_m)
+             self._quiet_end = dt_time(end_h, end_m)
+             await self._reply(update, f"🔇 Тихие часы: {self._quiet_start.strftime('%H:%M')} — {self._quiet_end.strftime('%H:%M')}")
+         except (ValueError, IndexError) as e:
+             logger.warning("Invalid quiet time format: %s", e)
+             await self._reply(update, "❌ Неверный формат. Используй: /quiet 23:00-07:00")
 
     @authorized_only
     async def cmd_health(self, update: Update, context: ContextTypes.DEFAULT_TYPE):

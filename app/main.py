@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import logging.handlers
 import signal
 import sys
 
@@ -66,17 +67,45 @@ async def run(config: Config):
 
 
 def main():
-    config_path = sys.argv[1] if len(sys.argv) > 1 else "/config/config.yml"
-    config = Config.load(config_path)
+     config_path = sys.argv[1] if len(sys.argv) > 1 else "/config/config.yml"
+     config = Config.load(config_path)
 
-    log_level = logging.DEBUG if config.debug else logging.INFO
-    logging.basicConfig(
-        level=log_level,
-        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-        datefmt="%Y-%m-%d %H:%M:%S",
-    )
+     log_level = logging.DEBUG if config.debug else logging.INFO
+     
+     # Настройка логирования
+     log_format = "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
+     log_date_format = "%Y-%m-%d %H:%M:%S"
+     
+     # Создание форматера
+     formatter = logging.Formatter(log_format, datefmt=log_date_format)
+     
+     # Логирование в консоль
+     console_handler = logging.StreamHandler(sys.stdout)
+     console_handler.setLevel(log_level)
+     console_handler.setFormatter(formatter)
+     
+     # Логирование в файл (с ротацией по размеру)
+     log_file = "/data/bot.log"
+     try:
+         file_handler = logging.handlers.RotatingFileHandler(
+             log_file,
+             maxBytes=10*1024*1024,  # 10 MB
+             backupCount=5  # Хранить 5 старых файлов
+         )
+         file_handler.setLevel(log_level)
+         file_handler.setFormatter(formatter)
+     except Exception as e:
+         print(f"Warning: Could not setup file logging to {log_file}: {e}", file=sys.stderr)
+         file_handler = None
+     
+     # Настройка корневого логгера
+     root_logger = logging.getLogger()
+     root_logger.setLevel(log_level)
+     root_logger.addHandler(console_handler)
+     if file_handler:
+         root_logger.addHandler(file_handler)
 
-    asyncio.run(run(config))
+     asyncio.run(run(config))
 
 
 if __name__ == "__main__":
