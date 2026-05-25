@@ -46,17 +46,21 @@ class TelegramNotifier:
             await update.message.reply_text(text)
 
     async def cmd_start(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        await self._reply(
-            update,
-            "Привет! Я бот уведомлений Frigate.\n\n"
-            "Команды:\n"
-            "/cameras — список камер\n"
-            "/<камера> — снимок с камеры\n"
-            "/snapall — снимки со всех камер\n"
-            "/mute — отключить уведомления\n"
-            "/unmute — включить уведомления\n"
+        cameras = await asyncio.to_thread(self.frigate.get_cameras)
+        lines = [
+            "Привет! Я бот уведомлений Frigate.\n",
+            "Команды:",
+            "/cameras — список камер",
+        ]
+        for cam in cameras:
+            lines.append(f"/{cam['name']} — снимок с камеры")
+        lines += [
+            "/snapall — снимки со всех камер",
+            "/mute — отключить уведомления",
+            "/unmute — включить уведомления",
             "/help — справка",
-        )
+        ]
+        await self._reply(update, "\n".join(lines))
 
     async def cmd_help(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         await self.cmd_start(update, context)
