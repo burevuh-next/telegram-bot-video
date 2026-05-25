@@ -154,6 +154,7 @@ class TelegramNotifier:
         for attempt in range(5):
             try:
                 await self.application.initialize()
+                await self.application.updater.start_polling()
                 await self.application.start()
                 await self.set_commands()
                 logger.info("Telegram bot started")
