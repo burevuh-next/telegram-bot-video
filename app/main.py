@@ -13,14 +13,6 @@ logger = logging.getLogger(__name__)
 
 async def run(config: Config):
     frigate = FrigateClient(config.frigate_url)
-    notifier = TelegramNotifier(
-        token=config.telegram_token,
-        chat_id=config.telegram_chat_id,
-        frigate=frigate,
-        monitor=monitor,
-        send_snapshot=config.send_snapshot,
-        send_video=config.send_video,
-    )
     loop = asyncio.get_event_loop()
 
     monitor = EventMonitor(
@@ -33,6 +25,15 @@ async def run(config: Config):
         include_cameras=config.include_cameras,
         exclude_cameras=config.exclude_cameras,
         loop=loop,
+    )
+
+    notifier = TelegramNotifier(
+        token=config.telegram_token,
+        chat_id=config.telegram_chat_id,
+        frigate=frigate,
+        monitor=monitor,
+        send_snapshot=config.send_snapshot,
+        send_video=config.send_video,
     )
 
     monitor.on_event(notifier.send_event_notification)
