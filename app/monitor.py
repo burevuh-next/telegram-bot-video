@@ -8,6 +8,8 @@ from pathlib import Path
 
 from app.frigate import FrigateClient, FrigateEvent
 
+_lock = threading.Lock()
+
 logger = logging.getLogger(__name__)
 
 
@@ -61,15 +63,77 @@ class EventMonitor:
             logger.warning("Failed to save state: %s", exc)
 
     def _should_process(self, event: FrigateEvent) -> bool:
-        if "all" not in self.include_cameras and event.camera not in self.include_cameras:
+        with _lock:
+            include_cameras = self.include_cameras
+            include_labels = self.include_labels
+            exclude_cameras = self.exclude_cameras
+            exclude_labels = self.exclude_labels
+        if "all" not in include_cameras and event.camera not in include_cameras:
             return False
-        if event.camera in self.exclude_cameras:
+        if event.camera in exclude_cameras:
             return False
-        if event.label in self.exclude_labels:
+        if event.label in exclude_labels:
             return False
-        if self.include_labels and event.label not in self.include_labels:
+        if include_labels and event.label not in include_labels:
             return False
         return True
+
+    def set_include_labels(self, labels: list[str]):
+        with _lock:
+            self.include_labels = labels
+
+    def set_include_cameras(self, cameras: list[str]):
+        with _lock:
+            self.include_cameras = cameras
+
+    def get_filters(self) -> dict:
+        with _lock:
+            return {
+                "include_labels": list(self.include_labels),
+                "exclude_labels": list(self.exclude_labels),
+                "include_cameras": list(self.include_cameras),
+                "exclude_cameras": list(self.exclude_cameras),
+            }
+
+    def add_include_label(self, label: str) -> str:
+        with _lock:
+            if label == "all":
+                self.include_labels = []
+                return "все"
+            if label in self.include_labels:
+                return "уже есть"
+            self.include_labels.append(label)
+            return "добавлена"
+
+    def remove_include_label(self, label: str) -> str:
+        with _lock:
+            if label == "all":
+                self.include_labels = []
+                return "теперь всё"
+            if label not in self.include_labels:
+                return "не найдена"
+            self.include_labels.remove(label)
+            return "удалена"
+
+    def add_include_camera(self, camera: str) -> str:
+        with _lock:
+            if camera == "all":
+                self.include_cameras = []
+                return "все"
+            if camera in self.include_cameras:
+                return "уже есть"
+            self.include_cameras.append(camera)
+            return "добавлена"
+
+    def remove_include_camera(self, camera: str) -> str:
+        with _lock:
+            if camera == "all":
+                self.include_cameras = []
+                return "теперь всё"
+            if camera not in self.include_cameras:
+                return "не найдена"
+            self.include_cameras.remove(camera)
+            return "удалена"
 
     def _poll(self):
         while self._running:

@@ -96,5 +96,59 @@ class FrigateClient:
             logger.warning("Failed to get cameras: %s", exc)
             return []
 
+    def get_event(self, event_id: str) -> FrigateEvent | None:
+        try:
+            resp = self.client.get(f"/api/events/{event_id}")
+            resp.raise_for_status()
+            return FrigateEvent(resp.json())
+        except Exception as exc:
+            logger.warning("Failed to get event %s: %s", event_id, exc)
+            return None
+
+    def get_version(self) -> str | None:
+        try:
+            resp = self.client.get("/api/version")
+            resp.raise_for_status()
+            return resp.text.strip()
+        except Exception as exc:
+            logger.warning("Failed to get version: %s", exc)
+            return None
+
+    def get_stats(self) -> dict | None:
+        try:
+            resp = self.client.get("/api/stats")
+            resp.raise_for_status()
+            return resp.json()
+        except Exception as exc:
+            logger.warning("Failed to get stats: %s", exc)
+            return None
+
+    def ptz(self, camera: str, action: str, **params) -> bool:
+        try:
+            resp = self.client.post(f"/api/{camera}/ptz", json={"action": action, **params})
+            resp.raise_for_status()
+            return True
+        except Exception as exc:
+            logger.warning("PTZ failed for %s: %s", camera, exc)
+            return False
+
+    def recording_start(self, camera: str) -> bool:
+        try:
+            resp = self.client.post(f"/api/recordings/start/{camera}")
+            resp.raise_for_status()
+            return True
+        except Exception as exc:
+            logger.warning("Failed to start recording for %s: %s", camera, exc)
+            return False
+
+    def recording_stop(self, camera: str) -> bool:
+        try:
+            resp = self.client.post(f"/api/recordings/stop/{camera}")
+            resp.raise_for_status()
+            return True
+        except Exception as exc:
+            logger.warning("Failed to stop recording for %s: %s", camera, exc)
+            return False
+
     def close(self):
         self.client.close()

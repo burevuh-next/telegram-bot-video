@@ -17,6 +17,7 @@ async def run(config: Config):
         token=config.telegram_token,
         chat_id=config.telegram_chat_id,
         frigate=frigate,
+        monitor=monitor,
         send_snapshot=config.send_snapshot,
         send_video=config.send_video,
     )
