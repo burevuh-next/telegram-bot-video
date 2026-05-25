@@ -31,8 +31,8 @@ class TelegramNotifier:
     def _register_handlers(self):
         self.application.add_handler(CommandHandler("start", self.cmd_start))
         self.application.add_handler(CommandHandler("help", self.cmd_help))
-        self.application.add_handler(CommandHandler("cam", self.cmd_cam))
         self.application.add_handler(CommandHandler("cameras", self.cmd_cameras))
+        self.application.add_handler(CommandHandler("snapall", self.cmd_snapall))
         self.application.add_handler(CommandHandler("mute", self.cmd_mute))
         self.application.add_handler(CommandHandler("unmute", self.cmd_unmute))
 
@@ -50,8 +50,9 @@ class TelegramNotifier:
             update,
             "Привет! Я бот уведомлений Frigate.\n\n"
             "Команды:\n"
-            "/cam <name> — snapshot с камеры\n"
             "/cameras — список камер\n"
+            "/<камера> — снимок с камеры\n"
+            "/snapall — снимки со всех камер\n"
             "/mute — отключить уведомления\n"
             "/unmute — включить уведомления\n"
             "/help — справка",
@@ -84,25 +85,6 @@ class TelegramNotifier:
             status = "✅" if cam.get("enabled", True) else "❌"
             lines.append(f"{status} {cam['name']}")
         await self._reply(update, "\n".join(lines))
-
-    async def cmd_cam(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        if update.effective_chat and update.effective_chat.id != self.chat_id:
-            return
-        if not context.args:
-            await self._reply(update, "Укажи имя камеры: /cam parking")
-            return
-        camera_name = context.args[0]
-        msg = await update.message.reply_text("Запрашиваю снимок...")
-        data = await asyncio.to_thread(self.frigate.get_latest_snapshot, camera_name)
-        if data:
-            await msg.delete()
-            await update.message.reply_photo(
-                io.BytesIO(data),
-                filename=f"{camera_name}.jpg",
-                caption=f"📷 {camera_name}\n{datetime.now().strftime('%H:%M:%S')}",
-            )
-        else:
-            await msg.edit_text(f"Не удалось получить снимок с камеры {camera_name}")
 
     async def send_event_notification(self, event: FrigateEvent):
         if self._muted:
@@ -140,18 +122,78 @@ class TelegramNotifier:
         except Exception as exc:
             logger.error("Failed to send notification: %s", exc)
 
+    def _make_cam_handler(self, camera_name: str):
+        async def handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+            if update.effective_chat and update.effective_chat.id != self.chat_id:
+                return
+            if not update.message:
+                return
+            msg = await update.message.reply_text("Запрашиваю снимок...")
+            data = await asyncio.to_thread(self.frigate.get_latest_snapshot, camera_name)
+            if data:
+                await msg.delete()
+                await update.message.reply_photo(
+                    io.BytesIO(data),
+                    filename=f"{camera_name}.jpg",
+                    caption=f"📷 {camera_name}\n{datetime.now().strftime('%H:%M:%S')}",
+                )
+            else:
+                await msg.edit_text(f"Не удалось получить снимок с камеры {camera_name}")
+        return handler
+
+    async def _register_camera_commands(self):
+        cameras = await asyncio.to_thread(self.frigate.get_cameras)
+        for cam in cameras:
+            name = cam["name"]
+            self.application.add_handler(CommandHandler(name, self._make_cam_handler(name)))
+
+    async def cmd_snapall(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        if update.effective_chat and update.effective_chat.id != self.chat_id:
+            return
+        if not update.message:
+            return
+        cameras = await asyncio.to_thread(self.frigate.get_cameras)
+        if not cameras:
+            await self._reply(update, "Не удалось получить список камер.")
+            return
+
+        msg = await update.message.reply_text("Запрашиваю снимки со всех камер...")
+        tasks = [asyncio.to_thread(self.frigate.get_latest_snapshot, cam["name"]) for cam in cameras]
+        results = await asyncio.gather(*tasks)
+        snapshots = dict(zip([cam["name"] for cam in cameras], results))
+        await msg.delete()
+
+        sent = 0
+        for name, data in snapshots.items():
+            if data:
+                await update.message.reply_photo(
+                    io.BytesIO(data),
+                    filename=f"{name}.jpg",
+                    caption=f"📷 {name}\n{datetime.now().strftime('%H:%M:%S')}",
+                )
+                sent += 1
+
+        if sent == 0:
+            await update.message.reply_text("Не удалось получить снимки ни с одной камеры.")
+        elif sent < len(cameras):
+            await update.message.reply_text(f"Получено {sent} из {len(cameras)} снимков.")
+
     async def set_commands(self):
+        cameras = await asyncio.to_thread(self.frigate.get_cameras)
         commands = [
             BotCommand("start", "Показать справку"),
-            BotCommand("cam", "Снимок с камеры: /cam <name>"),
             BotCommand("cameras", "Список камер"),
+            BotCommand("snapall", "Снимки со всех камер"),
             BotCommand("mute", "Отключить уведомления"),
             BotCommand("unmute", "Включить уведомления"),
         ]
+        for cam in cameras:
+            commands.append(BotCommand(cam["name"], f"Снимок с {cam['name']}"))
         await self.application.bot.set_my_commands(commands)
 
     async def start(self):
         await self.application.initialize()
+        await self._register_camera_commands()
         logger.info("Application initialized")
         if self.application.updater:
             logger.info("Starting updater polling...")
