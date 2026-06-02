@@ -66,7 +66,7 @@ class TelegramNotifier:
         self.application.add_handler(CommandHandler("uptime", self.cmd_uptime))
         self.application.add_handler(CommandHandler("mute", self.cmd_mute))
         self.application.add_handler(CommandHandler("unmute", self.cmd_unmute))
-        self.application.add_handler(CallbackQueryHandler(self._handle_snapall_callback, pattern="^snapall$"))
+        self.application.add_handler(CallbackQueryHandler(self._handle_snapall_callback, pattern="snapall"))
         self.application.add_handler(CallbackQueryHandler(self._handle_event_callback, pattern="^event:"))
 
     async def _reply(self, update: Update, text: str, reply_markup=None):
@@ -525,8 +525,8 @@ class TelegramNotifier:
 
     async def _handle_snapall_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         query = update.callback_query
-        logger.debug("Snapall callback received: data=%s, from=%s", query.data, query.from_user.id if query.from_user else None)
-        await query.answer()
+        logger.warning("SNAPALL CALLBACK: data=%s, from=%s", query.data, query.from_user.id if query.from_user else None)
+        await query.answer("Запрашиваю снимки...")
         await self._send_snapall(query.message)
 
     async def set_commands(self):
