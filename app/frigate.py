@@ -137,7 +137,7 @@ class FrigateClient:
             logger.warning("Failed to get last clip for %s: %s", camera, exc)
             return None
 
-    async def get_recording_clip(self, camera: str, seconds: int = 30) -> bytes | None:
+    async def get_recording_clip(self, camera: str, seconds: int = 10) -> bytes | None:
         try:
             now = time.time()
             start = now - seconds
