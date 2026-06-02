@@ -740,8 +740,6 @@ class TelegramNotifier:
             name = cam["name"]
             await status.edit_text(f"🎥 {name}: загружаю...")
             data = await self.frigate.get_recording_clip(name, 10)
-            if not data:
-                data = await self.frigate.get_last_clip(name)
             if data:
                 await msg_target.reply_video(
                     io.BytesIO(data),
