@@ -4,8 +4,8 @@ import io
 import logging
 from datetime import date, datetime, time as dt_time
 
-from telegram import BotCommand, Update
-from telegram.ext import Application, CommandHandler, ContextTypes
+from telegram import BotCommand, InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram.ext import Application, CallbackQueryHandler, CommandHandler, ContextTypes
 
 from app.frigate import FrigateClient, FrigateEvent
 
@@ -66,6 +66,7 @@ class TelegramNotifier:
         self.application.add_handler(CommandHandler("uptime", self.cmd_uptime))
         self.application.add_handler(CommandHandler("mute", self.cmd_mute))
         self.application.add_handler(CommandHandler("unmute", self.cmd_unmute))
+        self.application.add_handler(CallbackQueryHandler(self._handle_event_callback, pattern="^event:"))
 
     async def _reply(self, update: Update, text: str):
         if update.message:
@@ -391,7 +392,13 @@ class TelegramNotifier:
         try:
             ts = event.start_time_dt.strftime('%d.%m.%Y %H:%M:%S')
             score = f"\n📊 Уверенность: {event.top_score:.0%}" if event.top_score else ""
-            caption = f"🚨 Обнаружен {event.label}\n📷 Камера: {event.camera}\n⏱ {ts}{score}"
+            caption = (f"🚨 Обнаружен {event.label}\n"
+                       f"📷 Камера: {event.camera}\n"
+                       f"⏱ {ts}{score}\n"
+                       f"🆔 `{event.id[:12]}…`")
+
+            keyboard = [[InlineKeyboardButton("ℹ️ Подробнее", callback_data=f"event:{event.id}")]]
+            reply_markup = InlineKeyboardMarkup(keyboard)
 
             if self.send_snapshot:
                 thumbnail = await self.frigate.get_thumbnail(event.id)
@@ -401,6 +408,7 @@ class TelegramNotifier:
                         photo=io.BytesIO(thumbnail),
                         filename=f"{event.camera}_{event.id[:8]}.jpg",
                         caption=caption,
+                        reply_markup=reply_markup,
                     )
                     return
 
@@ -411,15 +419,48 @@ class TelegramNotifier:
                         chat_id=self.chat_id,
                         video=io.BytesIO(clip),
                         caption=caption,
+                        reply_markup=reply_markup,
                     )
                     return
 
             await self.application.bot.send_message(
                 chat_id=self.chat_id,
                 text=caption,
+                reply_markup=reply_markup,
             )
         except Exception as exc:
-            logger.error("Failed to send notification: %s", exc)
+            logger.error("Failed to send notification for event %s: %s", event.id, exc, exc_info=True)
+
+    async def _handle_event_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        query = update.callback_query
+        await query.answer()
+        event_id = query.data.split(":", 1)[1]
+
+        msg = await query.message.reply_text("Запрашиваю событие...")
+        event = await self.frigate.get_event(event_id)
+        if not event:
+            await msg.edit_text("Событие не найдено.")
+            return
+
+        ts = event.start_time_dt.strftime('%d.%m.%Y %H:%M:%S')
+        score = f" (уверенность {event.top_score:.0%})" if event.top_score else ""
+        caption = (
+            f"🚨 Событие {event.id[:12]}…\n"
+            f"🏷 {event.label}{score}\n"
+            f"📷 {event.camera}\n"
+            f"⏱ {ts}"
+        )
+
+        thumbnail = await self.frigate.get_thumbnail(event.id)
+        if thumbnail:
+            await msg.delete()
+            await query.message.reply_photo(
+                io.BytesIO(thumbnail),
+                filename=f"{event.id[:8]}.jpg",
+                caption=caption,
+            )
+        else:
+            await msg.edit_text(caption)
 
     def _make_cam_handler(self, camera_name: str):
         async def handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
