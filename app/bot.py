@@ -74,6 +74,7 @@ class TelegramNotifier:
         self.application.add_handler(CommandHandler("mute", self.cmd_mute))
         self.application.add_handler(CommandHandler("unmute", self.cmd_unmute))
         self.application.add_handler(CallbackQueryHandler(self._handle_menu_callback, pattern="^menu:"))
+        self.application.add_handler(CallbackQueryHandler(self._handle_clip_callback, pattern="^clip:"))
         self.application.add_handler(CallbackQueryHandler(self._handle_snapall_callback, pattern="^snapall$"))
         self.application.add_handler(CallbackQueryHandler(self._handle_event_callback, pattern="^event:"))
         self.application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self._handle_text_input))
@@ -85,13 +86,15 @@ class TelegramNotifier:
     @authorized_only
     async def cmd_start(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         cameras = await self.frigate.get_cameras()
-        camera_row = []
+        keyboard = []
         for cam in cameras:
-            camera_row.append(InlineKeyboardButton(f"📷 {cam['name']}", callback_data=f"menu:cam:{cam['name']}"))
-
-        keyboard = [
+            name = cam['name']
+            keyboard.append([
+                InlineKeyboardButton(f"📷 {name}", callback_data=f"menu:cam:{name}"),
+                InlineKeyboardButton(f"🎥 {name}", callback_data=f"menu:clip:{name}"),
+            ])
+        keyboard += [
             [InlineKeyboardButton("📸 Снимки со всех камер", callback_data="menu:snapall")],
-            camera_row,
             [InlineKeyboardButton("🔔 Подписки", callback_data="menu:subs"),
              InlineKeyboardButton("🔇 Тихие часы", callback_data="menu:quiet")],
             [InlineKeyboardButton("✅ Вкл уведомления", callback_data="menu:unmute"),
@@ -428,6 +431,8 @@ class TelegramNotifier:
                        f"🆔 `{event.id[:12]}…`")
 
             keyboard = [[InlineKeyboardButton("ℹ️ Подробнее", callback_data=f"event:{event.id}")]]
+            if event.has_clip:
+                keyboard.append([InlineKeyboardButton("🎥 Смотреть видео", callback_data=f"clip:{event.id}")])
             reply_markup = InlineKeyboardMarkup(keyboard)
 
             if self.send_snapshot:
@@ -492,6 +497,23 @@ class TelegramNotifier:
         else:
             await msg.edit_text(caption)
 
+    async def _handle_clip_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        query = update.callback_query
+        await query.answer("🎥 Загружаю видео...")
+        event_id = query.data.split(":", 1)[1]
+
+        msg = await query.message.reply_text("Загружаю видео...")
+        clip_data = await self.frigate.get_clip(event_id)
+        if clip_data:
+            await msg.delete()
+            await query.message.reply_video(
+                io.BytesIO(clip_data),
+                filename=f"{event_id[:8]}.mp4",
+                caption="🎥 Видео события",
+            )
+        else:
+            await msg.edit_text("❌ Не удалось загрузить видео.")
+
     async def _handle_menu_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         query = update.callback_query
         await query.answer()
@@ -521,6 +543,20 @@ class TelegramNotifier:
                 )
             else:
                 await msg.edit_text(f"Не удалось получить снимок с камеры {camera_name}")
+
+        elif action.startswith("clip:"):
+            camera_name = action.split(":", 1)[1]
+            msg = await query.message.reply_text(f"🎥 Запрашиваю видео с {camera_name}...")
+            clip_data = await self.frigate.get_last_clip(camera_name)
+            if clip_data:
+                await msg.delete()
+                await query.message.reply_video(
+                    io.BytesIO(clip_data),
+                    filename=f"{camera_name}_{int(datetime.now().timestamp())}.mp4",
+                    caption=f"🎥 {camera_name}\n{datetime.now().strftime('%H:%M:%S')}",
+                )
+            else:
+                await msg.edit_text(f"❌ Нет видео для камеры {camera_name}")
 
         elif action == "quiet":
             context.user_data["pending_action"] = "quiet"

@@ -121,6 +121,18 @@ class FrigateClient:
             logger.warning("Failed to get clip for %s: %s", event_id, exc)
             return None
 
+    async def get_last_clip(self, camera: str) -> bytes | None:
+        try:
+            events = await self.get_events(camera=camera, limit=3)
+            for event in events:
+                if event.has_clip:
+                    return await self.get_clip(event.id)
+            logger.info("No clip events for %s", camera)
+            return None
+        except Exception as exc:
+            logger.warning("Failed to get last clip for %s: %s", camera, exc)
+            return None
+
     async def get_latest_snapshot(self, camera: str) -> bytes | None:
         try:
             resp = await self._request("GET", f"/api/{camera}/latest.jpg")
