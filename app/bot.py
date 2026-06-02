@@ -5,7 +5,14 @@ import logging
 from datetime import date, datetime, time as dt_time
 
 from telegram import BotCommand, InlineKeyboardButton, InlineKeyboardMarkup, Update
-from telegram.ext import Application, CallbackQueryHandler, CommandHandler, ContextTypes
+from telegram.ext import (
+    Application,
+    CallbackQueryHandler,
+    CommandHandler,
+    ContextTypes,
+    MessageHandler,
+    filters,
+)
 
 from app.frigate import FrigateClient, FrigateEvent
 
@@ -66,8 +73,10 @@ class TelegramNotifier:
         self.application.add_handler(CommandHandler("uptime", self.cmd_uptime))
         self.application.add_handler(CommandHandler("mute", self.cmd_mute))
         self.application.add_handler(CommandHandler("unmute", self.cmd_unmute))
-        self.application.add_handler(CallbackQueryHandler(self._handle_snapall_callback, pattern="snapall"))
+        self.application.add_handler(CallbackQueryHandler(self._handle_menu_callback, pattern="^menu:"))
+        self.application.add_handler(CallbackQueryHandler(self._handle_snapall_callback, pattern="^snapall$"))
         self.application.add_handler(CallbackQueryHandler(self._handle_event_callback, pattern="^event:"))
+        self.application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self._handle_text_input))
 
     async def _reply(self, update: Update, text: str, reply_markup=None):
         if update.message:
@@ -76,28 +85,26 @@ class TelegramNotifier:
     @authorized_only
     async def cmd_start(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         cameras = await self.frigate.get_cameras()
-        lines = [
-            "Привет! Я бот уведомлений Frigate.\n",
-            "Команды:",
-            "/sub — управление подписками",
-            "/cameras — список камер",
-            "/snapall — снимки со всех камер",
-            "/event <id> — информация о событии",
-            "/record <камера> [on|off] — запись",
-            "/quiet [время|off] — тихие часы",
-            "/health — состояние Frigate",
-            "/stats — статистика",
-            "/uptime — аптайм",
-            "/mute /unmute — уведомления",
-            "/help — справка",
-            "",
-            "📷 Камеры:",
-        ]
+        camera_row = []
         for cam in cameras:
-            lines.append(f"/{cam['name']} — снимок с камеры")
-        keyboard = [[InlineKeyboardButton("📷 Снимки со всех камер", callback_data="snapall")]]
+            camera_row.append(InlineKeyboardButton(f"📷 {cam['name']}", callback_data=f"menu:cam:{cam['name']}"))
+
+        keyboard = [
+            [InlineKeyboardButton("📸 Снимки со всех камер", callback_data="menu:snapall")],
+            camera_row,
+            [InlineKeyboardButton("🔔 Подписки", callback_data="menu:subs"),
+             InlineKeyboardButton("🔇 Тихие часы", callback_data="menu:quiet")],
+            [InlineKeyboardButton("✅ Вкл уведомления", callback_data="menu:unmute"),
+             InlineKeyboardButton("❌ Выкл уведомления", callback_data="menu:mute")],
+            [InlineKeyboardButton("📊 Статистика", callback_data="menu:stats"),
+             InlineKeyboardButton("🖥 Здоровье", callback_data="menu:health")],
+            [InlineKeyboardButton("⏱ Аптайм", callback_data="menu:uptime"),
+             InlineKeyboardButton("🎥 Запись", callback_data="menu:record")],
+            [InlineKeyboardButton("🏷 Подписаться", callback_data="menu:subscribe"),
+             InlineKeyboardButton("🗑 Отписаться", callback_data="menu:unsubscribe")],
+        ]
         reply_markup = InlineKeyboardMarkup(keyboard)
-        await self._reply(update, "\n".join(lines) + "\n\n👇 Или нажми кнопку:", reply_markup=reply_markup)
+        await self._reply(update, "Привет! Я бот уведомлений Frigate.\n\n👇 Выбери действие:", reply_markup=reply_markup)
 
     @authorized_only
     async def cmd_help(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -317,6 +324,9 @@ class TelegramNotifier:
         if not update.message:
             return
         msg = await update.message.reply_text("Проверяю состояние Frigate...")
+        await self._send_health_to_msg(msg)
+
+    async def _send_health_to_msg(self, msg):
         version = await self.frigate.get_version()
         stats = await self.frigate.get_stats()
         cameras = await self.frigate.get_cameras()
@@ -332,11 +342,18 @@ class TelegramNotifier:
             lines.append(f"⏱ Frigate работает: {d}д {h}ч {m}м")
         await msg.edit_text("\n".join(lines))
 
+    async def _send_health(self, query):
+        msg = await query.message.reply_text("Проверяю состояние Frigate...")
+        await self._send_health_to_msg(msg)
+
     @authorized_only
     async def cmd_stats(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not update.message:
             return
         msg = await update.message.reply_text("Собираю статистику...")
+        await self._send_stats_to_msg(msg)
+
+    async def _send_stats_to_msg(self, msg):
         today_start = datetime.combine(date.today(), dt_time.min).timestamp()
         events = await self.frigate.get_events(limit=500, after=today_start)
         if not events:
@@ -358,10 +375,17 @@ class TelegramNotifier:
             lines.append(f"  {cam}: {count}")
         await msg.edit_text("\n".join(lines))
 
+    async def _send_stats(self, query):
+        msg = await query.message.reply_text("Собираю статистику...")
+        await self._send_stats_to_msg(msg)
+
     @authorized_only
     async def cmd_uptime(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not update.message:
             return
+        await self._send_uptime_to_msg(update.message)
+
+    async def _send_uptime_to_msg(self, msg):
         delta = datetime.now() - self._start_time
         d, h, m = delta.days, delta.seconds // 3600, (delta.seconds % 3600) // 60
         lines = [
@@ -374,7 +398,10 @@ class TelegramNotifier:
             s = stats["service_uptime"]
             fd, fh, fm = int(s // 86400), int((s % 86400) // 3600), int((s % 3600) // 60)
             lines.append(f"🖥 Frigate работает: {fd}д {fh}ч {fm}м")
-        await update.message.reply_text("\n".join(lines))
+        await msg.reply_text("\n".join(lines))
+
+    async def _send_uptime(self, query):
+        await self._send_uptime_to_msg(query.message)
 
     async def send_event_notification(self, event: FrigateEvent):
         if self._muted:
@@ -464,6 +491,138 @@ class TelegramNotifier:
             )
         else:
             await msg.edit_text(caption)
+
+    async def _handle_menu_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        query = update.callback_query
+        await query.answer()
+        action = query.data.split(":", 1)[1] if ":" in query.data else query.data
+
+        if action == "snapall":
+            await self._send_snapall(query.message)
+
+        elif action == "subs":
+            filters = self.monitor.get_filters() if self.monitor else {}
+            lines = ["📋 Текущие подписки:"]
+            if filters:
+                lines.append(f"🏷 Метки: {'все' if not filters['include_labels'] else ', '.join(filters['include_labels'])}")
+                lines.append(f"📷 Камеры: {'все' if not filters['include_cameras'] else ', '.join(filters['include_cameras'])}")
+            await query.message.reply_text("\n".join(lines))
+
+        elif action.startswith("cam:"):
+            camera_name = action.split(":", 1)[1]
+            msg = await query.message.reply_text("Запрашиваю снимок...")
+            data = await self.frigate.get_latest_snapshot(camera_name)
+            if data:
+                await msg.delete()
+                await query.message.reply_photo(
+                    io.BytesIO(data),
+                    filename=f"{camera_name}.jpg",
+                    caption=f"📷 {camera_name}\n{datetime.now().strftime('%H:%M:%S')}",
+                )
+            else:
+                await msg.edit_text(f"Не удалось получить снимок с камеры {camera_name}")
+
+        elif action == "quiet":
+            context.user_data["pending_action"] = "quiet"
+            await query.message.reply_text(
+                "🔇 Введи время тихих часов в формате HH:MM-HH:MM\n"
+                "Например: 23:00-07:00\n"
+                "Или отправь «off» чтобы выключить."
+            )
+
+        elif action == "mute":
+            self._muted = True
+            await query.message.reply_text("❌ Уведомления отключены.")
+
+        elif action == "unmute":
+            self._muted = False
+            await query.message.reply_text("✅ Уведомления включены.")
+
+        elif action == "stats":
+            await self._send_stats(query)
+
+        elif action == "health":
+            await self._send_health(query)
+
+        elif action == "uptime":
+            await self._send_uptime(query)
+
+        elif action == "record":
+            cameras = await self.frigate.get_cameras()
+            lines = ["🎥 Управление записью\n", "Напиши: /record <камера> on или /record <камера> off"]
+            for cam in cameras:
+                lines.append(f"  📷 {cam['name']}")
+            await query.message.reply_text("\n".join(lines))
+
+        elif action == "subscribe":
+            context.user_data["pending_action"] = "subscribe"
+            await query.message.reply_text(
+                "🏷 Напиши метку для подписки (например: person, car)\n"
+                "Или: camera <имя_камеры>"
+            )
+
+        elif action == "unsubscribe":
+            context.user_data["pending_action"] = "unsubscribe"
+            await query.message.reply_text(
+                "🗑 Напиши метку для отписки (например: person, car)\n"
+                "Или: camera <имя_камеры>"
+            )
+
+        else:
+            await query.message.reply_text(f"Неизвестная команда: {action}")
+
+    async def _handle_text_input(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        if not update.message or not update.message.text:
+            return
+        pending = context.user_data.pop("pending_action", None)
+        if not pending:
+            return
+        text = update.message.text.strip()
+
+        if pending == "quiet":
+            if text.lower() in ("off", "выкл", "disable"):
+                self._quiet_start = self._quiet_end = None
+                await self._reply(update, "🔇 Тихие часы отключены.")
+                return
+            try:
+                if "-" not in text:
+                    raise ValueError
+                times = text.split("-")
+                sh, sm = times[0].strip().split(":")
+                eh, em = times[1].strip().split(":")
+                sh_i, sm_i = int(sh), int(sm)
+                eh_i, em_i = int(eh), int(em)
+                if not (0 <= sh_i <= 23 and 0 <= sm_i <= 59 and 0 <= eh_i <= 23 and 0 <= em_i <= 59):
+                    raise ValueError
+                self._quiet_start = dt_time(sh_i, sm_i)
+                self._quiet_end = dt_time(eh_i, em_i)
+                await self._reply(update, f"🔇 Тихие часы: {self._quiet_start.strftime('%H:%M')} — {self._quiet_end.strftime('%H:%M')}")
+            except (ValueError, IndexError):
+                await self._reply(update, "❌ Неверный формат. Используй: HH:MM-HH:MM")
+
+        elif pending == "subscribe":
+            if not self.monitor:
+                await self._reply(update, "Монитор не подключён.")
+                return
+            if text.startswith("camera "):
+                name = text[7:].strip()
+                result = self.monitor.add_include_camera(name) if name else "не указана"
+                await self._reply(update, f"📷 Камера {name}: {result}")
+            else:
+                result = self.monitor.add_include_label(text)
+                await self._reply(update, f"🏷 Метка {text}: {result}")
+
+        elif pending == "unsubscribe":
+            if not self.monitor:
+                await self._reply(update, "Монитор не подключён.")
+                return
+            if text.startswith("camera "):
+                name = text[7:].strip()
+                result = self.monitor.remove_include_camera(name) if name else "не указана"
+                await self._reply(update, f"📷 Камера {name}: {result}")
+            else:
+                result = self.monitor.remove_include_label(text)
+                await self._reply(update, f"🏷 Метка {text}: {result}")
 
     def _make_cam_handler(self, camera_name: str):
         async def handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
