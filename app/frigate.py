@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import time
 from datetime import datetime
 
 import httpx
@@ -134,6 +135,19 @@ class FrigateClient:
             return None
         except Exception as exc:
             logger.warning("Failed to get last clip for %s: %s", camera, exc)
+            return None
+
+    async def get_recording_clip(self, camera: str, seconds: int = 30) -> bytes | None:
+        try:
+            now = time.time()
+            start = now - seconds
+            resp = await self._request("GET", f"/api/{camera}/start/{start}/end/{now}/clip.mp4")
+            if len(resp.content) > 0:
+                return resp.content
+            logger.info("No recording data for %s in last %ds", camera, seconds)
+            return None
+        except (httpx.RequestError, httpx.HTTPStatusError) as exc:
+            logger.warning("Failed to get recording clip for %s: %s", camera, exc)
             return None
 
     async def get_latest_snapshot(self, camera: str) -> bytes | None:

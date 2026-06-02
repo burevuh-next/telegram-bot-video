@@ -95,6 +95,7 @@ class TelegramNotifier:
             ])
         keyboard += [
             [InlineKeyboardButton("📸 Снимки со всех камер", callback_data="menu:snapall")],
+            [InlineKeyboardButton("🎥 Видео со всех камер", callback_data="menu:recordall")],
             [InlineKeyboardButton("🔔 Подписки", callback_data="menu:subs"),
              InlineKeyboardButton("🔇 Тихие часы", callback_data="menu:quiet")],
             [InlineKeyboardButton("✅ Вкл уведомления", callback_data="menu:unmute"),
@@ -531,6 +532,9 @@ class TelegramNotifier:
         if action == "snapall":
             await self._send_snapall(query.message)
 
+        elif action == "recordall":
+            await self._send_recordall(query.message)
+
         elif action == "subs":
             filters = self.monitor.get_filters() if self.monitor else {}
             lines = ["📋 Текущие подписки:"]
@@ -723,6 +727,36 @@ class TelegramNotifier:
             await msg_target.reply_text("Не удалось получить снимки ни с одной камеры.")
         elif sent < len(cameras):
             await msg_target.reply_text(f"Получено {sent} из {len(cameras)} снимков.")
+
+    async def _send_recordall(self, msg_target):
+        cameras = await self.frigate.get_cameras()
+        if not cameras:
+            await msg_target.reply_text("Не удалось получить список камер.")
+            return
+
+        status = await msg_target.reply_text("🎥 Запрашиваю видео со всех камер...")
+        sent = 0
+        for cam in cameras:
+            name = cam["name"]
+            await status.edit_text(f"🎥 {name}: загружаю...")
+            data = await self.frigate.get_recording_clip(name, 30)
+            if not data:
+                data = await self.frigate.get_last_clip(name)
+            if data:
+                await msg_target.reply_video(
+                    io.BytesIO(data),
+                    filename=f"{name}_{int(datetime.now().timestamp())}.mp4",
+                    caption=f"🎥 {name} (30с)\n{datetime.now().strftime('%H:%M:%S')}",
+                    read_timeout=120,
+                    write_timeout=120,
+                    connect_timeout=30,
+                )
+                sent += 1
+
+        if sent == 0:
+            await status.edit_text("❌ Не удалось получить видео ни с одной камеры.")
+        else:
+            await status.edit_text(f"✅ Отправлено {sent} из {len(cameras)} видео.")
 
     @authorized_only
     async def cmd_snapall(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
