@@ -13,7 +13,7 @@ class Config:
     Переменные окружения имеют приоритет над файлом конфигурации.
     """
     telegram_token: str = ""
-    telegram_chat_id: int | str = 0
+    telegram_chat_id: int | str | None = None
     frigate_url: str = "http://localhost:5000"
     poll_interval: int = 5
     event_limit: int = 50
@@ -25,6 +25,8 @@ class Config:
     send_snapshot: bool = True
     send_video: bool = False
     debug: bool = False
+    config_path: str = "/config/config.yml"
+    log_file: str = "/data/bot.log"
 
     @classmethod
     def load(cls, path: str | None = None) -> "Config":
@@ -54,6 +56,8 @@ class Config:
             "FRIGATE_URL": "frigate_url",
             "POLL_INTERVAL": "poll_interval",
             "DEBUG": "debug",
+            "CONFIG_PATH": "config_path",
+            "LOG_FILE": "log_file",
         }
         for env_key, attr in env_map.items():
             if env_key in os.environ:
@@ -90,7 +94,7 @@ class Config:
             except (ValueError, IndexError) as e:
                 raise ValueError(f"Failed to parse telegram_chat_id: {e}") from e
 
-        if not cfg.telegram_chat_id:
+        if cfg.telegram_chat_id is None:
             raise ValueError("telegram_chat_id is required (set in config.yml or TELEGRAM_CHAT_ID env)")
 
         return cfg

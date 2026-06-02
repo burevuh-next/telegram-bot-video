@@ -2,7 +2,7 @@ import asyncio
 import functools
 import io
 import logging
-from datetime import date, datetime, time as dt_time
+from datetime import datetime, time as dt_time
 
 from telegram import BotCommand, InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import (
@@ -23,6 +23,8 @@ def authorized_only(func):
     @functools.wraps(func)
     async def wrapper(self, update: Update, context: ContextTypes.DEFAULT_TYPE, *args, **kwargs):
         if not self._authorized(update):
+            if update.effective_chat:
+                await update.effective_chat.send_message("⛔ У вас нет доступа к этому боту.")
             return
         return await func(self, update, context, *args, **kwargs)
     return wrapper
@@ -83,6 +85,49 @@ class TelegramNotifier:
         if update.message:
             await update.message.reply_text(text, reply_markup=reply_markup)
 
+    def _parse_quiet_time(self, text: str) -> tuple | None:
+        text = text.strip()
+        if text.lower() in ("off", "выкл", "disable"):
+            return None
+        if "-" not in text:
+            raise ValueError
+        times = text.split("-")
+        sh, sm = times[0].strip().split(":")
+        eh, em = times[1].strip().split(":")
+        start = dt_time(int(sh), int(sm))
+        end = dt_time(int(eh), int(em))
+        if not (0 <= start.hour <= 23 and 0 <= start.minute <= 59):
+            raise ValueError
+        if not (0 <= end.hour <= 23 and 0 <= end.minute <= 59):
+            raise ValueError
+        return start, end
+
+    async def _subscribe_to(self, target: str) -> str:
+        if not self.monitor:
+            return "❌ Монитор не подключён"
+        if target.startswith("camera "):
+            name = target[7:].strip()
+            return f"📷 Камера {name}: {await self.monitor.add_include_camera(name)}" if name else "❌ Имя камеры не указано"
+        return f"🏷 Метка {target}: {await self.monitor.add_include_label(target)}"
+
+    async def _unsubscribe_from(self, target: str) -> str:
+        if not self.monitor:
+            return "❌ Монитор не подключён"
+        if target.startswith("camera "):
+            name = target[7:].strip()
+            return f"📷 Камера {name}: {await self.monitor.remove_include_camera(name)}" if name else "❌ Имя камеры не указано"
+        return f"🏷 Метка {target}: {await self.monitor.remove_include_label(target)}"
+
+    def _event_detail_caption(self, event: FrigateEvent) -> str:
+        ts = event.start_time_dt.strftime('%d.%m.%Y %H:%M:%S')
+        score = f" (уверенность {event.top_score:.0%})" if event.top_score else ""
+        return (
+            f"🚨 Событие {event.id[:12]}…\n"
+            f"🏷 {event.label}{score}\n"
+            f"📷 {event.camera}\n"
+            f"⏱ {ts}"
+        )
+
     @authorized_only
     async def cmd_start(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         cameras = await self.frigate.get_cameras()
@@ -112,7 +157,25 @@ class TelegramNotifier:
 
     @authorized_only
     async def cmd_help(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        await self.cmd_start(update, context)
+        text = (
+            "🤖 *Frigate Bot — команды*\n\n"
+            "*/start* — Главное меню\n"
+            "*/cameras* — Список камер\n"
+            "*/snapall* — Снимки со всех камер\n"
+            "*/event <id>* — Информация о событии\n"
+            "*/sub* — Текущие подписки\n"
+            "*/subscribe <метка>* — Подписаться на метку\n"
+            "*/subscribe camera <имя>* — Подписаться на камеру\n"
+            "*/unsubscribe <метка>* — Отписаться\n"
+            "*/record <камера> on/off* — Управление записью\n"
+            "*/quiet HH:MM-HH:MM* — Тихие часы\n"
+            "*/mute* / */unmute* — Вкл/выкл уведомления\n"
+            "*/health* — Состояние Frigate\n"
+            "*/stats* — Статистика\n"
+            "*/uptime* — Аптайм\n\n"
+            "Также можешь ввести имя камеры для быстрого снимка."
+        )
+        await self._reply(update, text)
 
     @authorized_only
     async def cmd_mute(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -157,24 +220,8 @@ class TelegramNotifier:
         if not context.args:
             await self._reply(update, "Укажи: /subscribe <метка> или /subscribe camera <камера>")
             return
-        
-        if context.args[0] == "camera":
-            if len(context.args) < 2:
-                await self._reply(update, "Укажи название камеры: /subscribe camera <имя>")
-                return
-            camera_name = context.args[1]
-            if not camera_name or not isinstance(camera_name, str):
-                await self._reply(update, "❌ Неверное имя камеры")
-                return
-            result = self.monitor.add_include_camera(camera_name)
-            await self._reply(update, f"📷 Камера {camera_name}: {result}")
-        else:
-            label = context.args[0]
-            if not label or not isinstance(label, str):
-                await self._reply(update, "❌ Неверная метка")
-                return
-            result = self.monitor.add_include_label(label)
-            await self._reply(update, f"🏷 Метка {label}: {result}")
+        result = await self._subscribe_to(" ".join(context.args))
+        await self._reply(update, result)
 
     @authorized_only
     async def cmd_unsubscribe(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -184,24 +231,8 @@ class TelegramNotifier:
         if not context.args:
             await self._reply(update, "Укажи: /unsubscribe <метка> или /unsubscribe camera <камера>")
             return
-        
-        if context.args[0] == "camera":
-            if len(context.args) < 2:
-                await self._reply(update, "Укажи название камеры: /unsubscribe camera <имя>")
-                return
-            camera_name = context.args[1]
-            if not camera_name or not isinstance(camera_name, str):
-                await self._reply(update, "❌ Неверное имя камеры")
-                return
-            result = self.monitor.remove_include_camera(camera_name)
-            await self._reply(update, f"📷 Камера {camera_name}: {result}")
-        else:
-            label = context.args[0]
-            if not label or not isinstance(label, str):
-                await self._reply(update, "❌ Неверная метка")
-                return
-            result = self.monitor.remove_include_label(label)
-            await self._reply(update, f"🏷 Метка {label}: {result}")
+        result = await self._unsubscribe_from(" ".join(context.args))
+        await self._reply(update, result)
 
     @authorized_only
     async def cmd_event(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -222,14 +253,7 @@ class TelegramNotifier:
         if not event:
             await msg.edit_text(f"Событие {event_id} не найдено.")
             return
-        ts = event.start_time_dt.strftime('%d.%m.%Y %H:%M:%S')
-        score = f" (уверенность {event.top_score:.0%})" if event.top_score else ""
-        caption = (
-            f"🚨 Событие {event.id[:12]}…\n"
-            f"🏷 {event.label}{score}\n"
-            f"📷 {event.camera}\n"
-            f"⏱ {ts}"
-        )
+        caption = self._event_detail_caption(event)
         thumbnail = await self.frigate.get_thumbnail(event.id)
         if thumbnail:
             await msg.delete()
@@ -244,6 +268,7 @@ class TelegramNotifier:
                     await update.message.reply_video(
                         io.BytesIO(clip),
                         filename=f"{event.id[:8]}.mp4",
+                        caption=caption,
                         read_timeout=120,
                         write_timeout=120,
                         connect_timeout=30,
@@ -298,32 +323,14 @@ class TelegramNotifier:
             await self._reply(update, "🔇 Тихие часы отключены.")
             return
         try:
-            time_arg = context.args[0].strip()
-            # Валидация формата времени
-            if "-" not in time_arg:
-                raise ValueError("Format must be HH:MM-HH:MM")
-            
-            times = time_arg.split("-")
-            if len(times) != 2:
-                raise ValueError("Expected exactly 2 times")
-            
-            sh, sm = times[0].strip().split(":")
-            eh, em = times[1].strip().split(":")
-            
-            # Валидация часов и минут
-            start_h, start_m = int(sh), int(sm)
-            end_h, end_m = int(eh), int(em)
-            
-            if not (0 <= start_h <= 23 and 0 <= start_m <= 59):
-                raise ValueError("Invalid start time")
-            if not (0 <= end_h <= 23 and 0 <= end_m <= 59):
-                raise ValueError("Invalid end time")
-            
-            self._quiet_start = dt_time(start_h, start_m)
-            self._quiet_end = dt_time(end_h, end_m)
+            result = self._parse_quiet_time(context.args[0])
+            if result is None:
+                self._quiet_start = self._quiet_end = None
+                await self._reply(update, "🔇 Тихие часы отключены.")
+                return
+            self._quiet_start, self._quiet_end = result
             await self._reply(update, f"🔇 Тихие часы: {self._quiet_start.strftime('%H:%M')} — {self._quiet_end.strftime('%H:%M')}")
-        except (ValueError, IndexError) as e:
-            logger.warning("Invalid quiet time format: %s", e)
+        except (ValueError, IndexError):
             await self._reply(update, "❌ Неверный формат. Используй: /quiet 23:00-07:00")
 
     @authorized_only
@@ -484,14 +491,7 @@ class TelegramNotifier:
             await msg.edit_text("Событие не найдено.")
             return
 
-        ts = event.start_time_dt.strftime('%d.%m.%Y %H:%M:%S')
-        score = f" (уверенность {event.top_score:.0%})" if event.top_score else ""
-        caption = (
-            f"🚨 Событие {event.id[:12]}…\n"
-            f"🏷 {event.label}{score}\n"
-            f"📷 {event.camera}\n"
-            f"⏱ {ts}"
-        )
+        caption = self._event_detail_caption(event)
 
         thumbnail = await self.frigate.get_thumbnail(event.id)
         if thumbnail:
@@ -529,99 +529,112 @@ class TelegramNotifier:
         await query.answer()
         action = query.data.split(":", 1)[1] if ":" in query.data else query.data
 
-        if action == "snapall":
-            await self._send_snapall(query.message)
-
-        elif action == "recordall":
-            await self._send_recordall(query.message)
-
-        elif action == "subs":
-            filters = self.monitor.get_filters() if self.monitor else {}
-            lines = ["📋 Текущие подписки:"]
-            if filters:
-                lines.append(f"🏷 Метки: {'все' if not filters['include_labels'] else ', '.join(filters['include_labels'])}")
-                lines.append(f"📷 Камеры: {'все' if not filters['include_cameras'] else ', '.join(filters['include_cameras'])}")
-            await query.message.reply_text("\n".join(lines))
-
-        elif action.startswith("cam:"):
-            camera_name = action.split(":", 1)[1]
-            msg = await query.message.reply_text("Запрашиваю снимок...")
-            data = await self.frigate.get_latest_snapshot(camera_name)
-            if data:
-                await msg.delete()
-                await query.message.reply_photo(
-                    io.BytesIO(data),
-                    filename=f"{camera_name}.jpg",
-                    caption=f"📷 {camera_name}\n{datetime.now().strftime('%H:%M:%S')}",
-                )
-            else:
-                await msg.edit_text(f"Не удалось получить снимок с камеры {camera_name}")
-
+        handlers = {
+            "snapall": lambda q, c: self._send_snapall(q.message),
+            "recordall": lambda q, c: self._send_recordall(q.message),
+            "subs": self._menu_subs,
+            "quiet": self._menu_quiet,
+            "mute": self._menu_mute,
+            "unmute": self._menu_unmute,
+            "stats": self._menu_stats,
+            "health": self._menu_health,
+            "uptime": self._menu_uptime,
+            "record": self._menu_record,
+            "subscribe": self._menu_subscribe,
+            "unsubscribe": self._menu_unsubscribe,
+        }
+        handler = handlers.get(action)
+        if action.startswith("cam:"):
+            await self._menu_cam_snapshot(query, action.split(":", 1)[1])
         elif action.startswith("clip:"):
-            camera_name = action.split(":", 1)[1]
-            msg = await query.message.reply_text(f"🎥 Запрашиваю видео с {camera_name}...")
-            clip_data = await self.frigate.get_last_clip(camera_name)
-            if clip_data:
-                await msg.delete()
-                await query.message.reply_video(
-                    io.BytesIO(clip_data),
-                    filename=f"{camera_name}_{int(datetime.now().timestamp())}.mp4",
-                    caption=f"🎥 {camera_name}\n{datetime.now().strftime('%H:%M:%S')}",
-                    read_timeout=120,
-                    write_timeout=120,
-                    connect_timeout=30,
-                )
-            else:
-                await msg.edit_text(f"❌ Нет видео для камеры {camera_name}")
-
-        elif action == "quiet":
-            context.user_data["pending_action"] = "quiet"
-            await query.message.reply_text(
-                "🔇 Введи время тихих часов в формате HH:MM-HH:MM\n"
-                "Например: 23:00-07:00\n"
-                "Или отправь «off» чтобы выключить."
-            )
-
-        elif action == "mute":
-            self._muted = True
-            await query.message.reply_text("❌ Уведомления отключены.")
-
-        elif action == "unmute":
-            self._muted = False
-            await query.message.reply_text("✅ Уведомления включены.")
-
-        elif action == "stats":
-            await self._send_stats(query)
-
-        elif action == "health":
-            await self._send_health(query)
-
-        elif action == "uptime":
-            await self._send_uptime(query)
-
-        elif action == "record":
-            cameras = await self.frigate.get_cameras()
-            lines = ["🎥 Управление записью\n", "Напиши: /record <камера> on или /record <камера> off"]
-            for cam in cameras:
-                lines.append(f"  📷 {cam['name']}")
-            await query.message.reply_text("\n".join(lines))
-
-        elif action == "subscribe":
-            context.user_data["pending_action"] = "subscribe"
-            await query.message.reply_text(
-                "🏷 Напиши метку для подписки (например: person, car)\n"
-                "Или: camera <имя_камеры>"
-            )
-
-        elif action == "unsubscribe":
-            context.user_data["pending_action"] = "unsubscribe"
-            await query.message.reply_text(
-                "🗑 Напиши метку для отписки (например: person, car)\n"
-                "Или: camera <имя_камеры>"
-            )
-
+            await self._menu_cam_clip(query, action.split(":", 1)[1])
+        elif handler:
+            await handler(query, context)
         else:
             await query.message.reply_text(f"Неизвестная команда: {action}")
+
+    async def _menu_subs(self, query, context):
+        if not self.monitor:
+            await query.message.reply_text("❌ Монитор не подключён.")
+            return
+        filters = self.monitor.get_filters()
+        lines = ["📋 Текущие подписки:"]
+        lines.append(f"🏷 Метки: {'все' if not filters['include_labels'] else ', '.join(filters['include_labels'])}")
+        lines.append(f"📷 Камеры: {'все' if not filters['include_cameras'] else ', '.join(filters['include_cameras'])}")
+        await query.message.reply_text("\n".join(lines))
+
+    async def _menu_cam_snapshot(self, query, camera_name):
+        msg = await query.message.reply_text("Запрашиваю снимок...")
+        data = await self.frigate.get_latest_snapshot(camera_name)
+        if data:
+            await msg.delete()
+            await query.message.reply_photo(
+                io.BytesIO(data),
+                filename=f"{camera_name}.jpg",
+                caption=f"📷 {camera_name}\n{datetime.now().strftime('%H:%M:%S')}",
+            )
+        else:
+            await msg.edit_text(f"Не удалось получить снимок с камеры {camera_name}")
+
+    async def _menu_cam_clip(self, query, camera_name):
+        msg = await query.message.reply_text(f"🎥 Запрашиваю видео с {camera_name}...")
+        clip_data = await self.frigate.get_last_clip(camera_name)
+        if clip_data:
+            await msg.delete()
+            await query.message.reply_video(
+                io.BytesIO(clip_data),
+                filename=f"{camera_name}_{int(datetime.now().timestamp())}.mp4",
+                caption=f"🎥 {camera_name}\n{datetime.now().strftime('%H:%M:%S')}",
+                read_timeout=120, write_timeout=120, connect_timeout=30,
+            )
+        else:
+            await msg.edit_text(f"❌ Нет видео для камеры {camera_name}")
+
+    async def _menu_quiet(self, query, context):
+        context.user_data["pending_action"] = "quiet"
+        await query.message.reply_text(
+            "🔇 Введи время тихих часов в формате HH:MM-HH:MM\n"
+            "Например: 23:00-07:00\n"
+            "Или отправь «off» чтобы выключить."
+        )
+
+    async def _menu_mute(self, query, context):
+        self._muted = True
+        await query.message.reply_text("❌ Уведомления отключены.")
+
+    async def _menu_unmute(self, query, context):
+        self._muted = False
+        await query.message.reply_text("✅ Уведомления включены.")
+
+    async def _menu_stats(self, query, context):
+        await self._send_stats(query)
+
+    async def _menu_health(self, query, context):
+        await self._send_health(query)
+
+    async def _menu_uptime(self, query, context):
+        await self._send_uptime(query)
+
+    async def _menu_record(self, query, context):
+        cameras = await self.frigate.get_cameras()
+        lines = ["🎥 Управление записью\n", "Напиши: /record <камера> on или /record <камера> off"]
+        for cam in cameras:
+            lines.append(f"  📷 {cam['name']}")
+        await query.message.reply_text("\n".join(lines))
+
+    async def _menu_subscribe(self, query, context):
+        context.user_data["pending_action"] = "subscribe"
+        await query.message.reply_text(
+            "🏷 Напиши метку для подписки (например: person, car)\n"
+            "Или: camera <имя_камеры>"
+        )
+
+    async def _menu_unsubscribe(self, query, context):
+        context.user_data["pending_action"] = "unsubscribe"
+        await query.message.reply_text(
+            "🗑 Напиши метку для отписки (например: person, car)\n"
+            "Или: camera <имя_камеры>"
+        )
 
     async def _handle_text_input(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not update.message or not update.message.text:
@@ -632,49 +645,24 @@ class TelegramNotifier:
         text = update.message.text.strip()
 
         if pending == "quiet":
-            if text.lower() in ("off", "выкл", "disable"):
-                self._quiet_start = self._quiet_end = None
-                await self._reply(update, "🔇 Тихие часы отключены.")
-                return
             try:
-                if "-" not in text:
-                    raise ValueError
-                times = text.split("-")
-                sh, sm = times[0].strip().split(":")
-                eh, em = times[1].strip().split(":")
-                sh_i, sm_i = int(sh), int(sm)
-                eh_i, em_i = int(eh), int(em)
-                if not (0 <= sh_i <= 23 and 0 <= sm_i <= 59 and 0 <= eh_i <= 23 and 0 <= em_i <= 59):
-                    raise ValueError
-                self._quiet_start = dt_time(sh_i, sm_i)
-                self._quiet_end = dt_time(eh_i, em_i)
-                await self._reply(update, f"🔇 Тихие часы: {self._quiet_start.strftime('%H:%M')} — {self._quiet_end.strftime('%H:%M')}")
+                result = self._parse_quiet_time(text)
+                if result is None:
+                    self._quiet_start = self._quiet_end = None
+                    await self._reply(update, "🔇 Тихие часы отключены.")
+                else:
+                    self._quiet_start, self._quiet_end = result
+                    await self._reply(update, f"🔇 Тихие часы: {self._quiet_start.strftime('%H:%M')} — {self._quiet_end.strftime('%H:%M')}")
             except (ValueError, IndexError):
                 await self._reply(update, "❌ Неверный формат. Используй: HH:MM-HH:MM")
 
         elif pending == "subscribe":
-            if not self.monitor:
-                await self._reply(update, "Монитор не подключён.")
-                return
-            if text.startswith("camera "):
-                name = text[7:].strip()
-                result = self.monitor.add_include_camera(name) if name else "не указана"
-                await self._reply(update, f"📷 Камера {name}: {result}")
-            else:
-                result = self.monitor.add_include_label(text)
-                await self._reply(update, f"🏷 Метка {text}: {result}")
+            result = await self._subscribe_to(text)
+            await self._reply(update, result)
 
         elif pending == "unsubscribe":
-            if not self.monitor:
-                await self._reply(update, "Монитор не подключён.")
-                return
-            if text.startswith("camera "):
-                name = text[7:].strip()
-                result = self.monitor.remove_include_camera(name) if name else "не указана"
-                await self._reply(update, f"📷 Камера {name}: {result}")
-            else:
-                result = self.monitor.remove_include_label(text)
-                await self._reply(update, f"🏷 Метка {text}: {result}")
+            result = await self._unsubscribe_from(text)
+            await self._reply(update, result)
 
     def _make_cam_handler(self, camera_name: str):
         async def handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -735,19 +723,23 @@ class TelegramNotifier:
             return
 
         status = await msg_target.reply_text("🎥 Запрашиваю видео со всех камер...")
+        sem = asyncio.Semaphore(3)
+
+        async def fetch(name):
+            async with sem:
+                data = await self.frigate.get_recording_clip(name, 10)
+                return name, data
+
+        results = await asyncio.gather(*[fetch(cam["name"]) for cam in cameras])
         sent = 0
-        for cam in cameras:
-            name = cam["name"]
-            await status.edit_text(f"🎥 {name}: загружаю...")
-            data = await self.frigate.get_recording_clip(name, 10)
+        for name, data in results:
             if data:
+                await status.edit_text(f"🎥 {name}: отправляю...")
                 await msg_target.reply_video(
                     io.BytesIO(data),
                     filename=f"{name}_{int(datetime.now().timestamp())}.mp4",
                     caption=f"🎥 {name} (10с)\n{datetime.now().strftime('%H:%M:%S')}",
-                    read_timeout=120,
-                    write_timeout=120,
-                    connect_timeout=30,
+                    read_timeout=120, write_timeout=120, connect_timeout=30,
                 )
                 sent += 1
 

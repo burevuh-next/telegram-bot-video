@@ -5,6 +5,7 @@ from datetime import datetime
 
 import httpx
 
+
 logger = logging.getLogger(__name__)
 
 
@@ -26,9 +27,12 @@ class FrigateEvent:
 
 
 class FrigateClient:
-    def __init__(self, base_url: str, timeout: int = 30):
+    def __init__(self, base_url: str, timeout: int = 120):
         self.base_url = base_url.rstrip("/")
-        self.client = httpx.AsyncClient(base_url=self.base_url, timeout=timeout)
+        self.client = httpx.AsyncClient(
+            base_url=self.base_url,
+            timeout=httpx.Timeout(connect=10, read=timeout, write=30, pool=10),
+        )
 
     async def _request(self, method: str, path: str, retries: int = 3, **kwargs) -> httpx.Response:
         """Выполнить HTTP-запрос с exponential backoff.
@@ -54,8 +58,7 @@ class FrigateClient:
                 resp.raise_for_status()
                 return resp
             except httpx.HTTPStatusError as exc:
-                if exc.response.status_code < 500:
-                    # Не перезапускаем для 4xx ошибок (клиентские ошибки)
+                if exc.response.status_code < 500 and exc.response.status_code != 429:
                     raise
                 last_exc = exc
             except httpx.RequestError as exc:
@@ -202,14 +205,6 @@ class FrigateClient:
         except (ValueError, KeyError) as exc:
             logger.error("Invalid stats data: %s", exc)
             return None
-
-    async def ptz(self, camera: str, action: str, **params) -> bool:
-        try:
-            await self._request("POST", f"/api/{camera}/ptz", json={"action": action, **params})
-            return True
-        except (httpx.RequestError, httpx.HTTPStatusError) as exc:
-            logger.warning("PTZ failed for %s: %s", camera, exc)
-            return False
 
     async def recording_start(self, camera: str) -> bool:
         try:

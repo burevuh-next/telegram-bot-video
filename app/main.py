@@ -1,6 +1,7 @@
 import asyncio
 import logging
-import logging.handlers
+from logging.handlers import RotatingFileHandler
+import os
 import signal
 import sys
 
@@ -67,7 +68,7 @@ async def run(config: Config):
 
 
 def main():
-     config_path = sys.argv[1] if len(sys.argv) > 1 else "/config/config.yml"
+     config_path = os.environ.get("CONFIG_PATH") or (sys.argv[1] if len(sys.argv) > 1 else "/config/config.yml")
      config = Config.load(config_path)
 
      log_level = logging.DEBUG if config.debug else logging.INFO
@@ -85,17 +86,17 @@ def main():
      console_handler.setFormatter(formatter)
      
      # Логирование в файл (с ротацией по размеру)
-     log_file = "/data/bot.log"
+     log_file = config.log_file
      try:
-         file_handler = logging.handlers.RotatingFileHandler(
+         file_handler = RotatingFileHandler(
              log_file,
              maxBytes=10*1024*1024,  # 10 MB
-             backupCount=5  # Хранить 5 старых файлов
+             backupCount=5,  # Хранить 5 старых файлов
          )
          file_handler.setLevel(log_level)
          file_handler.setFormatter(formatter)
      except Exception as e:
-         print(f"Warning: Could not setup file logging to {log_file}: {e}", file=sys.stderr)
+         logger.warning("Could not setup file logging to %s: %s", log_file, e)
          file_handler = None
      
      # Настройка корневого логгера
