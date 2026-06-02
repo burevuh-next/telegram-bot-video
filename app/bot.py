@@ -243,6 +243,9 @@ class TelegramNotifier:
                     await update.message.reply_video(
                         io.BytesIO(clip),
                         filename=f"{event.id[:8]}.mp4",
+                        read_timeout=120,
+                        write_timeout=120,
+                        connect_timeout=30,
                     )
         else:
             await msg.edit_text(caption)
@@ -455,6 +458,9 @@ class TelegramNotifier:
                         video=io.BytesIO(clip),
                         caption=caption,
                         reply_markup=reply_markup,
+                        read_timeout=120,
+                        write_timeout=120,
+                        connect_timeout=30,
                     )
                     return
 
@@ -510,6 +516,9 @@ class TelegramNotifier:
                 io.BytesIO(clip_data),
                 filename=f"{event_id[:8]}.mp4",
                 caption="🎥 Видео события",
+                read_timeout=120,
+                write_timeout=120,
+                connect_timeout=30,
             )
         else:
             await msg.edit_text("❌ Не удалось загрузить видео.")
@@ -554,6 +563,9 @@ class TelegramNotifier:
                     io.BytesIO(clip_data),
                     filename=f"{camera_name}_{int(datetime.now().timestamp())}.mp4",
                     caption=f"🎥 {camera_name}\n{datetime.now().strftime('%H:%M:%S')}",
+                    read_timeout=120,
+                    write_timeout=120,
+                    connect_timeout=30,
                 )
             else:
                 await msg.edit_text(f"❌ Нет видео для камеры {camera_name}")
