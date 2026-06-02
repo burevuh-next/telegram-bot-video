@@ -66,11 +66,12 @@ class TelegramNotifier:
         self.application.add_handler(CommandHandler("uptime", self.cmd_uptime))
         self.application.add_handler(CommandHandler("mute", self.cmd_mute))
         self.application.add_handler(CommandHandler("unmute", self.cmd_unmute))
+        self.application.add_handler(CallbackQueryHandler(self._handle_snapall_callback, pattern="^snapall$"))
         self.application.add_handler(CallbackQueryHandler(self._handle_event_callback, pattern="^event:"))
 
-    async def _reply(self, update: Update, text: str):
+    async def _reply(self, update: Update, text: str, reply_markup=None):
         if update.message:
-            await update.message.reply_text(text)
+            await update.message.reply_text(text, reply_markup=reply_markup)
 
     @authorized_only
     async def cmd_start(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -94,7 +95,9 @@ class TelegramNotifier:
         ]
         for cam in cameras:
             lines.append(f"/{cam['name']} — снимок с камеры")
-        await self._reply(update, "\n".join(lines))
+        keyboard = [[InlineKeyboardButton("📷 Снимки со всех камер", callback_data="snapall")]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await self._reply(update, "\n".join(lines) + "\n\n👇 Или нажми кнопку:", reply_markup=reply_markup)
 
     @authorized_only
     async def cmd_help(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -487,16 +490,13 @@ class TelegramNotifier:
             name = cam["name"]
             self.application.add_handler(CommandHandler(name, self._make_cam_handler(name)))
 
-    @authorized_only
-    async def cmd_snapall(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        if not update.message:
-            return
+    async def _send_snapall(self, msg_target):
         cameras = await self.frigate.get_cameras()
         if not cameras:
-            await self._reply(update, "Не удалось получить список камер.")
+            await msg_target.reply_text("Не удалось получить список камер.")
             return
 
-        msg = await update.message.reply_text("Запрашиваю снимки со всех камер...")
+        msg = await msg_target.reply_text("Запрашиваю снимки со всех камер...")
         tasks = [self.frigate.get_latest_snapshot(cam["name"]) for cam in cameras]
         results = await asyncio.gather(*tasks)
         snapshots = dict(zip([cam["name"] for cam in cameras], results))
@@ -505,7 +505,7 @@ class TelegramNotifier:
         sent = 0
         for name, data in snapshots.items():
             if data:
-                await update.message.reply_photo(
+                await msg_target.reply_photo(
                     io.BytesIO(data),
                     filename=f"{name}.jpg",
                     caption=f"📷 {name}\n{datetime.now().strftime('%H:%M:%S')}",
@@ -513,9 +513,20 @@ class TelegramNotifier:
                 sent += 1
 
         if sent == 0:
-            await update.message.reply_text("Не удалось получить снимки ни с одной камеры.")
+            await msg_target.reply_text("Не удалось получить снимки ни с одной камеры.")
         elif sent < len(cameras):
-            await update.message.reply_text(f"Получено {sent} из {len(cameras)} снимков.")
+            await msg_target.reply_text(f"Получено {sent} из {len(cameras)} снимков.")
+
+    @authorized_only
+    async def cmd_snapall(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        if not update.message:
+            return
+        await self._send_snapall(update.message)
+
+    async def _handle_snapall_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        query = update.callback_query
+        await query.answer()
+        await self._send_snapall(query.message)
 
     async def set_commands(self):
         cameras = await self.frigate.get_cameras()
