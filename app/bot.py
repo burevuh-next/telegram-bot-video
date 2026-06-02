@@ -525,7 +525,7 @@ class TelegramNotifier:
 
     async def _handle_snapall_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         query = update.callback_query
-        logger.warning("SNAPALL CALLBACK: data=%s, from=%s", query.data, query.from_user.id if query.from_user else None)
+        logger.info("SNAPALL CALLBACK: data=%s, from=%s", query.data, query.from_user.id if query.from_user else None)
         await query.answer("Запрашиваю снимки...")
         await self._send_snapall(query.message)
 
@@ -555,7 +555,7 @@ class TelegramNotifier:
         logger.info("Application initialized")
         if self.application.updater:
             logger.info("Starting updater polling...")
-            await self.application.updater.start_polling()
+            await self.application.updater.start_polling(allowed_updates=["message", "callback_query"])
             logger.info("Updater polling started")
         else:
             logger.error("No updater available!")
