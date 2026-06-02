@@ -525,6 +525,7 @@ class TelegramNotifier:
 
     async def _handle_snapall_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         query = update.callback_query
+        logger.debug("Snapall callback received: data=%s, from=%s", query.data, query.from_user.id if query.from_user else None)
         await query.answer()
         await self._send_snapall(query.message)
 
