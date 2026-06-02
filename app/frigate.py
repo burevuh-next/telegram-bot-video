@@ -123,11 +123,14 @@ class FrigateClient:
 
     async def get_last_clip(self, camera: str) -> bytes | None:
         try:
-            events = await self.get_events(camera=camera, limit=3)
+            events = await self.get_events(camera=camera, limit=5)
             for event in events:
                 if event.has_clip:
-                    return await self.get_clip(event.id)
-            logger.info("No clip events for %s", camera)
+                    clip = await self.get_clip(event.id)
+                    if clip:
+                        return clip
+                    logger.debug("Clip unavailable for event %s, trying next", event.id)
+            logger.info("No available clips for %s", camera)
             return None
         except Exception as exc:
             logger.warning("Failed to get last clip for %s: %s", camera, exc)
